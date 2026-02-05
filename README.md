@@ -11,6 +11,7 @@ This is an application for technical diagnosis and validation of Oracle OJET.
 - **Show Commands**: OJET command reference with examples and field explanations
 - **Add/Remove Tables**: Step-by-step guides for table management
 - **Monitor**: Real-time monitoring of OJET sources via Striim REST API
+- **Ojet Queries**: Execute 7 pre-configured Oracle queries for OJET monitoring and troubleshooting ⭐ NEW
 
 ### 🔍 Technical Validations
 
@@ -81,6 +82,21 @@ This is an application for technical diagnosis and validation of Oracle OJET.
   - `show <source> status details` - Detailed status with SCN and metrics
   - `show <source> memory` - Memory usage summary
   - `show <source> memory details` - Detailed memory breakdown with explanations
+
+### 📊 OJET Queries (NEW in v1.3.0)
+- **Direct Oracle Database Queries**: Execute pre-configured queries for OJET monitoring
+- **7 Pre-configured Queries**:
+  1. **Check Capture Process Status** - View detailed status from DBA_CAPTURE
+  2. **Check Propagation Receiver** - Monitor data transport and propagation
+  3. **Check Capture Process Memory Usage** - Monitor memory allocation for capture
+  4. **Check Apply Process Memory Usage** - Monitor apply/reader process memory
+  5. **Check Streams Pool Memory Usage** - Monitor overall streams pool allocation
+  6. **Check Database Memory Parameters** - View Oracle memory configuration
+  7. **Check Transactions Being Processed** - View active transactions
+- **Interactive Documentation**: Expandable column descriptions and health metrics for each query
+- **Optimized Table Display**: Space-efficient columns with dynamic widths
+- **Credential Persistence**: Database credentials saved in browser localStorage
+- **Troubleshooting Tips**: Built-in guidance for common issues and health indicators
 
 ## 🛠️ Technology Stack
 

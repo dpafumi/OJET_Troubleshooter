@@ -1,20 +1,28 @@
-# OJET Troubleshooter v1.2.0 - Installation Guide
+# OJET Troubleshooter v1.3.0 - Installation Guide
 
-**Release Date**: January 20, 2026  
-**Version**: 1.2.0  
-**Package**: OJET_Troubleshooter_v1.2.0.zip
+**Release Date**: February 5, 2026
+**Version**: 1.3.0
+**Package**: OJET_Troubleshooter_v1.3.0.zip
 
 ---
 
-## 🎉 What's New in v1.2.0
+## 🎉 What's New in v1.3.0
 
 ### Major Features
-- ✨ **Validation Downstream Dashboard** - Dual database support for downstream scenarios
-- ✨ **Multi-Database Connection Pools** - Independent connections for multiple databases
-- ✨ **Graceful Shutdown** - Automatic cleanup of all connections on exit
-- ✨ **Enhanced Striim Integration** - Better error handling and diagnostics
-- ✨ **Persistent Credentials** - Database credentials saved across page navigation
-- ✨ **Password Autocomplete Prevention** - No more Chrome password popups
+- ✨ **OJET Queries Page** - 7 pre-configured Oracle queries for OJET monitoring
+- ✨ **Interactive Documentation** - Expandable column descriptions and health metrics
+- ✨ **Optimized Table Display** - Space-efficient columns with dynamic widths
+- ✨ **Credential Persistence** - Database credentials saved in browser localStorage
+- ✨ **Troubleshooting Tips** - Built-in guidance for common issues
+
+### 7 Pre-configured Queries
+1. Check Capture Process Status (DBA_CAPTURE)
+2. Check Propagation Receiver
+3. Check Capture Process Memory Usage
+4. Check Apply Process Memory Usage
+5. Check Streams Pool Memory Usage
+6. Check Database Memory Parameters
+7. Check Transactions Being Processed
 
 See **RELEASE_NOTES.md** for complete details.
 
@@ -48,7 +56,7 @@ Before installing, ensure you have:
 
 ### Step 1: Extract the Package
 ```bash
-unzip OJET_Troubleshooter_v1.2.0.zip
+unzip OJET_Troubleshooter_v1.3.0.zip
 cd OJET_Troubleshooter
 ```
 
