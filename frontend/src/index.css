@@ -33,6 +33,19 @@ code {
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
 }
 
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
 .app {
   display: flex;
   height: 100vh;
@@ -40,10 +53,10 @@ code {
 }
 
 .sidebar {
-  width: 320px;
+  width: 260px;
   background: var(--bg-card);
   border-right: 1px solid var(--border-color);
-  padding: 24px;
+  padding: 20px;
   overflow-y: auto;
   box-shadow: var(--shadow-md);
 }
@@ -55,23 +68,23 @@ code {
 }
 
 .form-group {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .form-group label {
   display: block;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   font-weight: 500;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .form-group input {
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 13px;
   transition: all 0.2s;
 }
 
@@ -142,9 +155,21 @@ code {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 24px;
   margin-top: 24px;
+}
+
+@media (max-width: 1200px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .card {
@@ -282,20 +307,20 @@ code {
 }
 
 .sidebar-header {
-  margin-bottom: 24px;
-  padding-bottom: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--border-color);
 }
 
 .sidebar-header h2 {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .sidebar-header p {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 

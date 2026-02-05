@@ -1,13 +1,10 @@
 #!/bin/bash
 
+# OJET Troubleshooter - Start Script
+# Starts servers in background and returns terminal control
+
 echo "🚀 Starting OJET Troubleshooter..."
 echo ""
-
-# Check if --background flag is passed
-BACKGROUND_MODE=false
-if [ "$1" == "--background" ] || [ "$1" == "-b" ]; then
-    BACKGROUND_MODE=true
-fi
 
 # Check if node_modules exist
 if [ ! -d "backend/node_modules" ]; then
@@ -29,74 +26,48 @@ fi
 # Create logs directory
 mkdir -p logs
 
-if [ "$BACKGROUND_MODE" = true ]; then
-    # Background mode - returns terminal control
-    echo ""
-    echo "✅ Starting servers in background..."
+echo ""
+echo "   Starting backend..."
 
-    # Start backend in background
-    cd backend
-    nohup npm start > ../logs/backend.log 2>&1 &
-    BACKEND_PID=$!
-    echo $BACKEND_PID > ../logs/backend.pid
-    cd ..
+# Start backend in background
+cd backend
+npm start > ../logs/backend.log 2>&1 &
+BACKEND_PID=$!
+cd ..
 
-    # Wait for backend to start
-    sleep 3
+# Wait for backend to start
+sleep 2
 
-    # Start frontend in background
-    cd frontend
-    nohup npm run dev > ../logs/frontend.log 2>&1 &
-    FRONTEND_PID=$!
-    echo $FRONTEND_PID > ../logs/frontend.pid
-    cd ..
+echo "   ✅ Backend started (PID: $BACKEND_PID)"
+echo "   Starting frontend..."
 
-    # Wait for frontend to start
-    sleep 2
+# Start frontend in background
+cd frontend
+npm run dev > ../logs/frontend.log 2>&1 &
+FRONTEND_PID=$!
+cd ..
 
-    echo ""
-    echo "=========================================="
-    echo "✅ Servers Started Successfully!"
-    echo "=========================================="
-    echo ""
-    echo "🌐 URLs:"
-    echo "   Frontend:    http://localhost:3000"
-    echo "   Backend API: http://localhost:3001"
-    echo ""
-    echo "📊 Process IDs:"
-    echo "   Backend:  $BACKEND_PID"
-    echo "   Frontend: $FRONTEND_PID"
-    echo ""
-    echo "📝 View Logs:"
-    echo "   tail -f logs/backend.log"
-    echo "   tail -f logs/frontend.log"
-    echo ""
-    echo "🛑 To stop servers:"
-    echo "   ./stop.sh"
-    echo ""
-else
-    # Foreground mode - shows logs in terminal
-    echo ""
-    echo "✅ Starting servers (foreground mode)..."
-    echo "   Frontend:    http://localhost:3000"
-    echo "   Backend API: http://localhost:3001"
-    echo ""
-    echo "💡 Tip: Use './start.sh --background' to run in background"
-    echo "📝 Logs will be shown below"
-    echo "🛑 Press Ctrl+C to stop both servers"
-    echo ""
+# Wait for frontend to start
+sleep 2
 
-    # Start backend in background (but keep script running)
-    (cd backend && npm start) > logs/backend.log 2>&1 &
-    BACKEND_PID=$!
-
-    # Wait a bit for backend to start
-    sleep 2
-
-    # Start frontend in foreground (shows logs)
-    (cd frontend && npm run dev)
-
-    # When frontend stops, kill backend
-    kill $BACKEND_PID 2>/dev/null
-fi
+echo "   ✅ Frontend started (PID: $FRONTEND_PID)"
+echo ""
+echo "✅ OJET Troubleshooter is running!"
+echo ""
+echo "📍 URLs:"
+echo "   Frontend: http://localhost:3000"
+echo "   Backend:  http://localhost:3001"
+echo ""
+echo "📋 Process IDs:"
+echo "   Backend PID:  $BACKEND_PID"
+echo "   Frontend PID: $FRONTEND_PID"
+echo ""
+echo "📝 Logs:"
+echo "   Backend:  tail -f logs/backend.log"
+echo "   Frontend: tail -f logs/frontend.log"
+echo ""
+echo "🛑 To stop:"
+echo "   ./stop.sh"
+echo "   or manually: kill $BACKEND_PID $FRONTEND_PID"
+echo ""
 

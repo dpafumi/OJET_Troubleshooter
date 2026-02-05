@@ -1,11 +1,14 @@
-import { CheckCircle, AlertTriangle, Terminal, GitBranch } from 'lucide-react'
+import { CheckCircle, AlertTriangle, Terminal, GitBranch, Activity, Database } from 'lucide-react'
 
 function Navigation({ currentPage, onPageChange }) {
   const pages = [
-    { id: 'validation', label: 'Validation', icon: CheckCircle },
+    { id: 'validation', label: 'Validation PROD', icon: CheckCircle },
+    { id: 'validation-downstream', label: 'Validation Downstream', icon: CheckCircle },
     { id: 'troubleshooting', label: 'Troubleshooting', icon: AlertTriangle },
     { id: 'commands', label: 'Show Commands', icon: Terminal },
-    { id: 'add-remove-tables', label: 'Add/Remove Tables', icon: GitBranch }
+    { id: 'add-remove-tables', label: 'Add/Remove Tables', icon: GitBranch },
+    { id: 'monitor', label: 'Monitor', icon: Activity },
+    { id: 'ojet-queries', label: 'Ojet Queries', icon: Database }
   ]
 
   return (

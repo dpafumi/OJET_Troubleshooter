@@ -1,4 +1,4 @@
-import { AlertTriangle, Wrench, Terminal, TrendingUp, Database, Activity, XCircle } from 'lucide-react'
+import { AlertTriangle, Wrench, Terminal, TrendingUp, Database, Activity, XCircle, RefreshCw } from 'lucide-react'
 
 function Troubleshooting() {
   const issues = [
@@ -227,11 +227,156 @@ exec DBMS_LOGMNR_D.BUILD(OPTIONS => DBMS_LOGMNR_D.STORE_IN_REDO_LOGS);
 END;
 /`
       }
+    },
+    {
+      id: 8,
+      title: 'OJET Restart SCN is not moving',
+      icon: RefreshCw,
+      iconBg: '#fef3c7',
+      iconColor: '#f59e0b',
+      reason: `The RecoverySCN (Restart SCN) is not moving even though the app is capturing events. This is a known Oracle bug that occurs with specific database version combinations.
+
+Example scenario:
+- Primary database Version: 19.29.0.0.0 (38322923)
+- Downstream database Version: 21.20.0.0.251021
+
+Oracle Support (SR 4-0001826122) identified this as Bug 18228645 - XStream capture REQUIRED_CHECKPOINT_SCN does not change (KI15056).`,
+      diagnosis: {
+        command: `-- Check if Restart SCN is stuck
+show <Ojet_Source> status <details>;
+
+-- Verify capture is working but SCN not moving
+SELECT CAPTURE_NAME, STATUS, REQUIRED_CHECKPOINT_SCN
+FROM DBA_CAPTURE;`,
+        description: 'Symptoms of this issue:',
+        results: [
+          { status: 'REQUIRED_CHECKPOINT_SCN', description: 'Not changing/moving forward' },
+          { status: 'Events captured', description: 'App is capturing events normally' },
+          { status: 'Version mismatch', description: 'Primary DB 19.x and Downstream DB 21.x' }
+        ],
+        note: 'This is Bug 18228645: XSTREAM CAPTURE REQUIRED_CHECKPOINT_SCN DOES NOT CHANGE'
+      },
+      solution: {
+        title: 'How to fix?',
+        description: 'Restart the apply process on the downstream database. The OJET app will stop automatically and needs to be restarted manually.',
+        command: `-- 1. Stop Apply process in Downstream DB
+BEGIN
+  DBMS_APPLY_ADM.STOP_APPLY(
+    apply_name => '<ojet_source_name>');
+END;
+/
+
+-- 2. Start Apply process in Downstream DB
+BEGIN
+  DBMS_APPLY_ADM.START_APPLY(
+    apply_name => '<ojet_source_name>');
+END;
+/
+
+-- 3. OJET App will stop automatically
+-- 4. Start app manually from Striim UI
+-- 5. Restart SCN will now move (both in APP and DB Capture)
+-- 6. App starts capturing events normally`
+      }
+    },
+    {
+      id: 9,
+      title: 'Archive Log Shipping Issues - OJET Waiting for Redo on DOWNSTREAM',
+      icon: Database,
+      iconBg: '#dbeafe',
+      iconColor: '#3b82f6',
+      reason: `The OJET application shows "WAITING FOR REDO: FILE NA" status, indicating that archive log files are not being shipped properly from the Primary database to the Downstream database. This is commonly caused by connection issues between the Primary and Downstream databases, or missing/unregistered archive log files on the Downstream side.`,
+      diagnosis: {
+        command: `-- You will see the following message with status command:
+show <OJET_SOURCE> status;
+
+-- Example:
+show admin.OJE_TEST status
+
+╒═════════════════╤═════════════════╤═════════════════╤═════════════════╤════════════════════════════════╤════════════╤═════════════════╤══════════════════════╕
+│ ServerStatus    │ Enqueue         │ Dequeue         │ CaptureStatus   │ CaptureState                   │ SpillCount │ Progress        │ Error                │
+├─────────────────┼─────────────────┼─────────────────┼─────────────────┼────────────────────────────────┼────────────┼─────────────────┼──────────────────────┤
+│ STRIIM$OJET$ADM │ STRIIM$Q$ADMIN$ │ STRIIM$Q$ADMIN$ │ STRIIM$C$ADMIN$ │ WAITING FOR REDO: FILE NA,     │ None       │ 01/21/2026 16:3 │ None                 │
+│ IN$OJE_TEST is  │ OJE_TEST is ena │ OJE_TEST is ena │ OJE_TEST is ena │ THREAD 1, SEQUENCE 562, SCN 0  │            │ 8:19            │                      │
+│ atached         │ bled            │ bled            │ bled            │ x0000000000f613fe              │            │                 │                      │
+└─────────────────┴─────────────────┴─────────────────┴─────────────────┴────────────────────────────────┴────────────┴─────────────────┴──────────────────────┘
+
+-- Then verify Status of Arch Log shipping on Primary DB:
+SELECT DEST_ID, STATUS, ERROR, destination
+FROM V$ARCHIVE_DEST_STATUS
+WHERE DEST_ID IN (1,2);
+
+-- Expected output showing the issue:
+DEST_ID  STATUS  Destination                              ERROR
+1        VALID   /opt/oracle/product/19c/dbhome_1/dbs/ARCH
+2        ERROR   DOWNS                                    ORA-16191: Primary log shipping client not logged on standby`,
+        description: 'Symptoms of this issue:',
+        results: [
+          { status: 'DEST_ID 2 shows ERROR', description: 'Archive log destination to Downstream is in ERROR state' },
+          { status: 'ORA-16191 error', description: 'Primary log shipping client not logged on standby' },
+          { status: 'OJET shows WAITING FOR REDO', description: 'Application is waiting for archive log files' }
+        ],
+        note: 'This issue occurs when the connection between Primary and Downstream databases is broken and/or Primary is not able to send Arch Log Files'
+      },
+      solution: {
+        title: 'How to fix?',
+        description: 'Assuming that the SYS password didn\'t change, perform the following steps:',
+        command: `-- STEP 1: Reset the destination state to force a reconnection on Primary DB
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_STATE_2 = DEFER;
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_STATE_2 = ENABLE;
+
+-- STEP 2: Validate shipping status again
+-- If that is OK, check: show admin.OJE_TEST status
+-- If you still see "WAITING FOR REDO:....." then:
+
+-- 2.1: Validate that the ARCH Log files are in Downstream Location
+    --Compare Arch Log files in Primary and Downstream, you should have all files
+
+-- 2.2: If not, copy Arch log files from Primary to Downstream
+
+-- 2.3: Validate that ownership of the files is correct on Downstream directory
+
+-- 2.4: Connect to Downstream DB (CDB$ROOT if applicable) and Manually Register the Arch log Files to the Capture process using ALTER DATABASE REGISTER LOGFILE...... FOR <CAPTURE_PROCESS>
+--Example:
+ALTER DATABASE REGISTER LOGFILE '/home/oracle/FROMPROD/1_559_1218022277.dbf' FOR 'STRIIM$C$ADMIN$OJE_TEST';
+ALTER DATABASE REGISTER LOGFILE '/home/oracle/FROMPROD/1_560_1218022277.dbf' FOR 'STRIIM$C$ADMIN$OJE_TEST';
+ALTER DATABASE REGISTER LOGFILE '/home/oracle/FROMPROD/1_561_1218022277.dbf' FOR 'STRIIM$C$ADMIN$OJE_TEST';
+
+-- 2.5: If it still shows "Waiting for Sequence 562," restart the Striim Capture process
+    --Stop the Striim App (from the Striim UI)
+    --Start the Striim App
+
+-- HELPFUL QUERY: Gap Finder Query. Run this in Downstream DB (CDB$ROOT if applicable)
+-- This identifies missing sequence numbers in archived logs
+SELECT
+    thread#,
+    low_sequence AS "Gap Start",
+    high_sequence AS "Gap End",
+    (high_sequence - low_sequence + 1) AS "Missing Count"
+FROM (
+    SELECT thread#, sequence# + 1 AS low_sequence, next_seq - 1 AS high_sequence
+    FROM (
+        SELECT thread#, sequence#,
+               LEAD(sequence#) OVER (PARTITION BY thread# ORDER BY sequence#) AS next_seq
+        FROM v$archived_log
+    )
+    WHERE next_seq IS NOT NULL
+      AND next_seq != sequence# + 1
+)
+ORDER BY thread#, low_sequence;`
+      }
     }
 
 
 
   ]
+
+  const scrollToIssue = (issueId) => {
+    const element = document.getElementById(`issue-${issueId}`)
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
 
   return (
     <div className="main-content">
@@ -240,11 +385,92 @@ END;
         <p>Common Issues and Solutions</p>
       </div>
 
+      {/* Index/Table of Contents */}
+      <div className="card" style={{ marginBottom: '24px' }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          marginBottom: '16px',
+          paddingBottom: '12px',
+          borderBottom: '2px solid #e5e7eb'
+        }}>
+          <Terminal size={20} color="#3b82f6" />
+          <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+            Quick Index - {issues.length} Common Issues
+          </h3>
+        </div>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+          gap: '12px'
+        }}>
+          {issues.map(issue => {
+            const Icon = issue.icon
+            return (
+              <div
+                key={issue.id}
+                onClick={() => scrollToIssue(issue.id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  padding: '12px',
+                  background: '#f9fafb',
+                  borderRadius: '8px',
+                  border: '1px solid #e5e7eb',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#f3f4f6'
+                  e.currentTarget.style.borderColor = '#3b82f6'
+                  e.currentTarget.style.transform = 'translateX(4px)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#f9fafb'
+                  e.currentTarget.style.borderColor = '#e5e7eb'
+                  e.currentTarget.style.transform = 'translateX(0)'
+                }}
+              >
+                <div style={{
+                  minWidth: '32px',
+                  height: '32px',
+                  borderRadius: '6px',
+                  background: issue.iconBg,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Icon size={16} color={issue.iconColor} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    lineHeight: '1.4'
+                  }}>
+                    {issue.id}. {issue.title}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         {issues.map(issue => {
           const Icon = issue.icon
           return (
-            <div key={issue.id} className="card" style={{ maxWidth: '100%' }}>
+            <div
+              key={issue.id}
+              id={`issue-${issue.id}`}
+              className="card"
+              style={{ maxWidth: '100%', scrollMarginTop: '20px' }}
+            >
               {/* Header */}
               <div className="card-header">
                 <div className="card-icon" style={{ background: issue.iconBg }}>
@@ -387,24 +613,26 @@ END;
                     </code>
                   </div>
 
-                  <div style={{ fontSize: '12px', color: '#065f46' }}>
-                    <strong>Example:</strong>
-                    <div style={{
-                      background: '#1f2937',
-                      padding: '8px 12px',
-                      borderRadius: '6px',
-                      marginTop: '4px'
-                    }}>
-                      <code style={{
-                        color: '#34d399',
-                        fontSize: '12px',
-                        fontFamily: 'monospace',
-                        whiteSpace: 'pre-wrap'
+                  {issue.solution.example && (
+                    <div style={{ fontSize: '12px', color: '#065f46' }}>
+                      <strong>Example:</strong>
+                      <div style={{
+                        background: '#1f2937',
+                        padding: '8px 12px',
+                        borderRadius: '6px',
+                        marginTop: '4px'
                       }}>
-                        {issue.solution.example}
-                      </code>
+                        <code style={{
+                          color: '#34d399',
+                          fontSize: '12px',
+                          fontFamily: 'monospace',
+                          whiteSpace: 'pre-wrap'
+                        }}>
+                          {issue.solution.example}
+                        </code>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             </div>

@@ -2,18 +2,136 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import oracledb from 'oracledb';
+import axios from 'axios';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Function to wrap text to fit within a maximum width
+function wrapText(text, maxWidth) {
+  if (text.length <= maxWidth) {
+    return [text];
+  }
+
+  const lines = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxWidth) {
+      lines.push(remaining);
+      break;
+    }
+
+    // Try to find a space to break at
+    let breakPoint = maxWidth;
+    const substring = remaining.substring(0, maxWidth + 1);
+    const lastSpace = substring.lastIndexOf(' ');
+
+    if (lastSpace > 0 && lastSpace < maxWidth) {
+      // Break at the last space within maxWidth
+      breakPoint = lastSpace;
+      lines.push(remaining.substring(0, breakPoint));
+      remaining = remaining.substring(breakPoint + 1); // Skip the space
+    } else {
+      // No space found, check if there's a $ or _ to break at
+      const lastDollar = substring.lastIndexOf('$');
+      const lastUnderscore = substring.lastIndexOf('_');
+      const breakChar = Math.max(lastDollar, lastUnderscore);
+
+      if (breakChar > 0 && breakChar < maxWidth) {
+        // Break after $ or _
+        breakPoint = breakChar + 1;
+        lines.push(remaining.substring(0, breakPoint));
+        remaining = remaining.substring(breakPoint);
+      } else {
+        // Force break at maxWidth
+        lines.push(remaining.substring(0, maxWidth));
+        remaining = remaining.substring(maxWidth);
+      }
+    }
+  }
+
+  return lines;
+}
+
+// Function to convert JSON object to ASCII table with text wrapping
+function jsonToTable(data) {
+  if (!data || typeof data !== 'object') {
+    return JSON.stringify(data, null, 2);
+  }
+
+  const entries = Object.entries(data);
+  if (entries.length === 0) {
+    return 'No data';
+  }
+
+  // Get headers and values
+  const headers = entries.map(([key]) => key);
+  const values = entries.map(([, value]) => String(value));
+
+  // Set maximum column width (adjust as needed)
+  const MAX_COL_WIDTH = 30;
+
+  // Calculate column widths with maximum limit
+  const colWidths = headers.map((header, i) => {
+    const headerLen = header.length;
+    const valueLen = values[i].length;
+    return Math.min(Math.max(headerLen, valueLen), MAX_COL_WIDTH);
+  });
+
+  // Wrap text for each cell
+  const wrappedHeaders = headers.map((header, i) => wrapText(header, colWidths[i]));
+  const wrappedValues = values.map((value, i) => wrapText(value, colWidths[i]));
+
+  // Find maximum number of lines needed for values
+  const maxValueLines = Math.max(...wrappedValues.map(lines => lines.length));
+
+  // Helper function to create a line
+  const createLine = (left, mid, right, fill) => {
+    return left + colWidths.map(w => fill.repeat(w + 2)).join(mid) + right;
+  };
+
+  // Helper function to create a multi-line row
+  const createMultiLineRow = (wrappedCells, separator) => {
+    const maxLines = Math.max(...wrappedCells.map(lines => lines.length));
+    const rowLines = [];
+
+    for (let lineIdx = 0; lineIdx < maxLines; lineIdx++) {
+      const cells = wrappedCells.map((lines, colIdx) => {
+        const text = lines[lineIdx] || '';
+        return ' ' + text.padEnd(colWidths[colIdx]) + ' ';
+      });
+      rowLines.push(separator + cells.join(separator) + separator);
+    }
+
+    return rowLines.join('\n');
+  };
+
+  // Build the table
+  const lines = [];
+  lines.push(createLine('╒', '╤', '╕', '═')); // Top border
+  lines.push(createMultiLineRow(wrappedHeaders, '│')); // Header row(s)
+  lines.push(createLine('├', '┼', '┤', '─')); // Middle border
+  lines.push(createMultiLineRow(wrappedValues, '│')); // Data row(s)
+  lines.push(createLine('└', '┴', '┘', '─')); // Bottom border
+
+  return lines.join('\n');
+}
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Oracle connection pool
-let pool = null;
+// Oracle connection pools - support multiple connections
+let pool = null; // Legacy pool for backward compatibility
+const connectionPools = new Map(); // Map to store multiple connection pools
+
+// Generate a unique key for a database configuration
+function getPoolKey(config) {
+  return `${config.host}:${config.port}/${config.sid}/${config.username}`;
+}
 
 // Initialize Oracle connection pool
 async function initializePool(config) {
@@ -21,7 +139,7 @@ async function initializePool(config) {
     if (pool) {
       await pool.close(0);
     }
-    
+
     pool = await oracledb.createPool({
       user: config.username,
       password: config.password,
@@ -30,11 +148,40 @@ async function initializePool(config) {
       poolMax: 5,
       poolIncrement: 1
     });
-    
+
     return { success: true, message: 'Connection pool created successfully' };
   } catch (error) {
     console.error('Error creating connection pool:', error);
     return { success: false, message: error.message };
+  }
+}
+
+// Get or create a connection pool for a specific database configuration
+async function getOrCreatePool(config) {
+  const poolKey = getPoolKey(config);
+
+  // Check if pool already exists
+  if (connectionPools.has(poolKey)) {
+    return connectionPools.get(poolKey);
+  }
+
+  // Create new pool
+  try {
+    const newPool = await oracledb.createPool({
+      user: config.username,
+      password: config.password,
+      connectString: `${config.host}:${config.port}/${config.sid}`,
+      poolMin: 1,
+      poolMax: 5,
+      poolIncrement: 1
+    });
+
+    connectionPools.set(poolKey, newPool);
+    console.log(`Created new connection pool for ${poolKey}`);
+    return newPool;
+  } catch (error) {
+    console.error('Error creating connection pool:', error);
+    throw error;
   }
 }
 
@@ -103,7 +250,22 @@ app.post('/api/execute-query', async (req, res) => {
 app.post('/api/check/dictionary-dumps', async (req, res) => {
   let connection;
   try {
-    connection = await pool.getConnection();
+    const { dbConfig } = req.body;
+
+    // Use the provided dbConfig or fall back to the legacy pool
+    let poolToUse = pool;
+    if (dbConfig) {
+      poolToUse = await getOrCreatePool(dbConfig);
+    }
+
+    if (!poolToUse) {
+      return res.status(400).json({
+        success: false,
+        message: 'Database connection not initialized. Please connect first.'
+      });
+    }
+
+    connection = await poolToUse.getConnection();
     // If Arch Log Files are "crossed" (BEGIN = Y in 1 row and END=Y on the previous row),
     // that is fine, perhaps BUILD was not able to fit in 1 ARCH LOG FILE
     const query = `
@@ -142,32 +304,38 @@ app.post('/api/check/dictionary-dumps', async (req, res) => {
 app.post('/api/check/table-instantiation', async (req, res) => {
   let connection;
   try {
-    const { tableOwner, tableNames } = req.body;
-    
-    if (!pool) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Database connection not initialized' 
+    const { tableOwner, tableNames, dbConfig } = req.body;
+
+    // Use the provided dbConfig or fall back to the legacy pool
+    let poolToUse = pool;
+    if (dbConfig) {
+      poolToUse = await getOrCreatePool(dbConfig);
+    }
+
+    if (!poolToUse) {
+      return res.status(400).json({
+        success: false,
+        message: 'Database connection not initialized'
       });
     }
-    
+
     const tableList = tableNames.split(',').map(t => `'${t.trim()}'`).join(',');
-    
+
     const query = `
       SELECT TABLE_OWNER, TABLE_NAME, TIMESTAMP, scn as SCN_TO_START_TABLE
-      FROM dba_capture_prepared_tables 
-      WHERE table_owner = :tableOwner 
+      FROM dba_capture_prepared_tables
+      WHERE table_owner = :tableOwner
         AND table_name IN (${tableList})
     `;
-    
-    connection = await pool.getConnection();
+
+    connection = await poolToUse.getConnection();
     const result = await connection.execute(query, { tableOwner }, {
       outFormat: oracledb.OUT_FORMAT_OBJECT,
       maxRows: 1000
     });
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       data: result.rows,
       columns: result.metaData?.map(col => col.name) || []
     });
@@ -185,9 +353,15 @@ app.post('/api/check/table-instantiation', async (req, res) => {
 app.post('/api/check/scn-validation', async (req, res) => {
   let connection;
   try {
-    const { tableOwner, tableNames } = req.body;
+    const { tableOwner, tableNames, dbConfig } = req.body;
 
-    if (!pool) {
+    // Use the provided dbConfig or fall back to the legacy pool
+    let poolToUse = pool;
+    if (dbConfig) {
+      poolToUse = await getOrCreatePool(dbConfig);
+    }
+
+    if (!poolToUse) {
       return res.status(400).json({
         success: false,
         message: 'Database connection not initialized'
@@ -203,7 +377,7 @@ app.post('/api/check/scn-validation', async (req, res) => {
         AND TABLE_NAME IN (${tableList})
     `;
 
-    connection = await pool.getConnection();
+    connection = await poolToUse.getConnection();
     const result = await connection.execute(query, { tableOwner }, {
       outFormat: oracledb.OUT_FORMAT_OBJECT
     });
@@ -235,7 +409,15 @@ app.post('/api/check/scn-validation', async (req, res) => {
 app.post('/api/check/open-transactions', async (req, res) => {
   let connection;
   try {
-    if (!pool) {
+    const { dbConfig } = req.body;
+
+    // Use the provided dbConfig or fall back to the legacy pool
+    let poolToUse = pool;
+    if (dbConfig) {
+      poolToUse = await getOrCreatePool(dbConfig);
+    }
+
+    if (!poolToUse) {
       return res.status(400).json({
         success: false,
         message: 'Database connection not initialized'
@@ -249,7 +431,7 @@ app.post('/api/check/open-transactions', async (req, res) => {
       FROM GV$TRANSACTION
     `;
 
-    connection = await pool.getConnection();
+    connection = await poolToUse.getConnection();
     const result = await connection.execute(query, {}, {
       outFormat: oracledb.OUT_FORMAT_OBJECT
     });
@@ -273,7 +455,15 @@ app.post('/api/check/open-transactions', async (req, res) => {
 app.post('/api/check/db-values', async (req, res) => {
   let connection;
   try {
-    if (!pool) {
+    const { dbConfig } = req.body;
+
+    // Use the provided dbConfig or fall back to the legacy pool
+    let poolToUse = pool;
+    if (dbConfig) {
+      poolToUse = await getOrCreatePool(dbConfig);
+    }
+
+    if (!poolToUse) {
       return res.status(400).json({
         success: false,
         message: 'Database connection not initialized'
@@ -308,7 +498,7 @@ app.post('/api/check/db-values', async (req, res) => {
       ORDER BY name
     `;
 
-    connection = await pool.getConnection();
+    connection = await poolToUse.getConnection();
     const result = await connection.execute(query, {}, {
       outFormat: oracledb.OUT_FORMAT_OBJECT
     });
@@ -332,7 +522,22 @@ app.post('/api/check/db-values', async (req, res) => {
 app.post('/api/action/build-dictionary', async (req, res) => {
   let connection;
   try {
-    connection = await pool.getConnection();
+    const { dbConfig } = req.body;
+
+    // Use the provided dbConfig or fall back to the legacy pool
+    let poolToUse = pool;
+    if (dbConfig) {
+      poolToUse = await getOrCreatePool(dbConfig);
+    }
+
+    if (!poolToUse) {
+      return res.status(400).json({
+        success: false,
+        message: 'Database connection not initialized'
+      });
+    }
+
+    connection = await poolToUse.getConnection();
 
     // Execute the dictionary build procedure
     await connection.execute(
@@ -363,7 +568,7 @@ app.post('/api/action/build-dictionary', async (req, res) => {
 // Action: Prepare Table Instantiation
 app.post('/api/action/prepare-tables', async (req, res) => {
   let connection;
-  const { tables } = req.body; // Expected format: [{ schema: 'SCHEMA1', table: 'TABLE1' }, ...]
+  const { tables, dbConfig } = req.body; // Expected format: [{ schema: 'SCHEMA1', table: 'TABLE1' }, ...]
 
   if (!tables || !Array.isArray(tables) || tables.length === 0) {
     return res.status(400).json({
@@ -373,7 +578,20 @@ app.post('/api/action/prepare-tables', async (req, res) => {
   }
 
   try {
-    connection = await pool.getConnection();
+    // Use the provided dbConfig or fall back to the legacy pool
+    let poolToUse = pool;
+    if (dbConfig) {
+      poolToUse = await getOrCreatePool(dbConfig);
+    }
+
+    if (!poolToUse) {
+      return res.status(400).json({
+        success: false,
+        message: 'Database connection not initialized'
+      });
+    }
+
+    connection = await poolToUse.getConnection();
     const results = [];
 
     // Execute PREPARE_TABLE_INSTANTIATION for each table
@@ -433,6 +651,700 @@ app.post('/api/action/prepare-tables', async (req, res) => {
   }
 });
 
+// Monitor OJET Source endpoint
+app.post('/api/monitor-source', async (req, res) => {
+  try {
+    let { striimUrl, username, password, namespace, sourceName } = req.body;
+
+    // Validation
+    if (!striimUrl || !username || !password || !namespace || !sourceName) {
+      return res.status(400).json({
+        success: false,
+        message: 'All fields are required: striimUrl, username, password, namespace, sourceName'
+      });
+    }
+
+    // Clean up the URL - remove trailing slash if present
+    striimUrl = striimUrl.trim().replace(/\/+$/, '');
+
+    console.log(`Cleaned Striim URL: ${striimUrl}`);
+
+    // Step 1: First, try to check if the server is reachable
+    let baseUrlReachable = false;
+    try {
+      console.log(`Checking if ${striimUrl} is reachable...`);
+      const healthCheck = await axios.get(striimUrl, {
+        timeout: 5000,
+        validateStatus: () => true // Accept any status code
+      });
+      baseUrlReachable = true;
+      console.log(`Server responded with status: ${healthCheck.status}`);
+    } catch (healthError) {
+      console.error(`Server not reachable:`, healthError.message);
+
+      if (healthError.code === 'ECONNREFUSED') {
+        return res.status(503).json({
+          success: false,
+          message: `Cannot connect to server at ${striimUrl}`,
+          details: 'Connection refused. Please verify:\n' +
+                  '1. The server is running\n' +
+                  '2. The URL and port are correct (e.g., http://10.142.0.46:9080)\n' +
+                  '3. There are no firewall rules blocking the connection'
+        });
+      } else if (healthError.code === 'ENOTFOUND') {
+        return res.status(503).json({
+          success: false,
+          message: `Cannot resolve hostname: ${striimUrl}`,
+          details: 'DNS lookup failed. Please verify the hostname/IP address is correct.'
+        });
+      }
+    }
+
+    // Step 2: Authenticate with Striim
+    let authToken;
+    try {
+      const authUrl = `${striimUrl}/security/authenticate`;
+      const authData = `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+
+      console.log(`\n=== AUTHENTICATION REQUEST ===`);
+      console.log(`URL: ${authUrl}`);
+      console.log(`Method: POST`);
+      console.log(`Content-Type: application/x-www-form-urlencoded`);
+      console.log(`Data: username=${username}&password=***`);
+      console.log(`==============================\n`);
+
+      const authResponse = await axios.post(
+        authUrl,
+        authData,
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          timeout: 10000, // 10 second timeout
+          maxRedirects: 0 // Don't follow redirects
+        }
+      );
+
+      console.log(`\n=== AUTHENTICATION RESPONSE ===`);
+      console.log(`Status: ${authResponse.status}`);
+      console.log(`Headers:`, authResponse.headers);
+      console.log(`Data:`, authResponse.data);
+      console.log(`===============================\n`);
+
+      authToken = authResponse.data.token;
+
+      if (!authToken) {
+        return res.status(401).json({
+          success: false,
+          message: 'Authentication failed: No token received from Striim'
+        });
+      }
+
+      console.log('Authentication successful, token received');
+    } catch (authError) {
+      console.error(`\n=== AUTHENTICATION ERROR ===`);
+      console.error(`Message: ${authError.message}`);
+      console.error(`Code: ${authError.code}`);
+      console.error(`URL: ${striimUrl}/security/authenticate`);
+
+      if (authError.response) {
+        console.error(`Response Status: ${authError.response.status}`);
+        console.error(`Response Headers:`, authError.response.headers);
+        console.error(`Response Data:`, authError.response.data);
+      } else if (authError.request) {
+        console.error(`No response received`);
+        console.error(`Request:`, authError.request);
+      }
+      console.error(`============================\n`);
+
+      let errorMessage = 'Authentication failed';
+
+      if (authError.code === 'ECONNREFUSED') {
+        errorMessage = `Cannot connect to Striim at ${striimUrl}. Please check the URL and ensure Striim is running.`;
+      } else if (authError.response?.status === 404) {
+        errorMessage = `Authentication endpoint not found. Please verify the Striim URL: ${striimUrl}`;
+      } else if (authError.response?.status === 401) {
+        errorMessage = 'Invalid username or password';
+      } else if (authError.response?.data?.message) {
+        errorMessage = authError.response.data.message;
+      } else {
+        errorMessage = authError.message;
+      }
+
+      return res.status(401).json({
+        success: false,
+        message: errorMessage
+      });
+    }
+
+    // Step 3: Execute monitoring commands
+    const fullSourceName = `${namespace}.${sourceName}`;
+    const commands = [
+      `show ${fullSourceName} status;`,
+      `show ${fullSourceName} status details;`,
+      `show ${fullSourceName} memory;`,
+      `show ${fullSourceName} memory details;`,
+      `mon ${fullSourceName};`
+    ];
+
+    const results = [];
+
+    for (const command of commands) {
+      try {
+        const commandResponse = await axios.post(
+          `${striimUrl}/api/v2/tungsten`,
+          command,
+          {
+            headers: {
+              'Authorization': `STRIIM-TOKEN ${authToken}`,
+              'Content-Type': 'text/plain'
+            }
+          }
+        );
+
+        // Extract only the Status or Memory data from the response
+        let output = commandResponse.data;
+        let extractedData = null;
+
+        // Check if this is a 'mon' command
+        const isMonCommand = command.trim().toLowerCase().startsWith('mon ');
+
+        if (Array.isArray(output) && output.length > 0) {
+          const firstItem = output[0];
+
+          if (isMonCommand) {
+            // For 'mon' command, the output is directly an object (not an array)
+            if (firstItem.output && typeof firstItem.output === 'object') {
+              const dataItem = firstItem.output;
+
+              // Map camelCase field names to display names and extract only specific fields
+              const fieldMapping = {
+                'lastEventPosition': 'Last Event Position',
+                'lastEventReadAge': 'Last Event Read Age',
+                'latestActivity': 'Latest Activity',
+                'memoryUsageApplySession': 'Memory Usage Apply Session',
+                'memoryUsageCaptureSession': 'Memory Usage Capture Session',
+                'memoryUsageLogminerSession': 'Memory Usage LogMiner Session',
+                'memoryUsageStreamsPool': 'Memory Usage Streams Pool',
+                'readTimestamp': 'Read Timestamp',
+                'timestamp': 'Timestamp'
+              };
+
+              extractedData = {};
+              Object.entries(fieldMapping).forEach(([camelKey, displayName]) => {
+                if (dataItem[camelKey] !== undefined) {
+                  extractedData[displayName] = dataItem[camelKey];
+                }
+              });
+            }
+          } else {
+            // For 'show' commands, extract Status or Memory object
+            if (firstItem.output && Array.isArray(firstItem.output) && firstItem.output.length > 0) {
+              const dataItem = firstItem.output[0];
+              if (dataItem.Status) {
+                extractedData = dataItem.Status;
+              } else if (dataItem.Memory) {
+                extractedData = dataItem.Memory;
+              }
+            }
+          }
+        }
+
+        // Convert to ASCII table
+        const formattedOutput = extractedData
+          ? jsonToTable(extractedData)
+          : JSON.stringify(output, null, 2);
+
+        results.push({
+          command: command,
+          output: formattedOutput,
+          success: true
+        });
+      } catch (cmdError) {
+        console.error(`Error executing command "${command}":`, cmdError.message);
+
+        // Convert error response to string if it's an object
+        let errorOutput = cmdError.response?.data || cmdError.message || 'Failed to execute command';
+        if (typeof errorOutput === 'object') {
+          errorOutput = JSON.stringify(errorOutput, null, 2);
+        }
+
+        results.push({
+          command: command,
+          output: errorOutput,
+          success: false
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      results: results
+    });
+
+  } catch (error) {
+    console.error('Error monitoring source:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to monitor source'
+    });
+  }
+});
+
+// Striim Authentication endpoint
+app.post('/api/striim-authenticate', async (req, res) => {
+  try {
+    let { striimUrl, username, password } = req.body;
+
+    // Validation
+    if (!striimUrl || !username || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'All fields are required: striimUrl, username, password'
+      });
+    }
+
+    // Clean up the URL - remove trailing slash if present
+    striimUrl = striimUrl.trim().replace(/\/+$/, '');
+
+    console.log(`Authenticating to Striim at: ${striimUrl}`);
+
+    // Authenticate with Striim
+    const authUrl = `${striimUrl}/security/authenticate`;
+    const authData = `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+
+    console.log(`Authentication URL: ${authUrl}`);
+
+    const authResponse = await axios.post(
+      authUrl,
+      authData,
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        timeout: 10000
+      }
+    );
+
+    const authToken = authResponse.data.token;
+
+    if (!authToken) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication failed: No token received from Striim'
+      });
+    }
+
+    console.log('Authentication successful');
+
+    res.json({
+      success: true,
+      token: authToken
+    });
+
+  } catch (error) {
+    console.error('Authentication error:', error.message);
+
+    let errorMessage = 'Authentication failed';
+
+    if (error.code === 'ECONNREFUSED') {
+      errorMessage = `Cannot connect to Striim. Please check the URL and ensure Striim is running.`;
+    } else if (error.response?.status === 404) {
+      errorMessage = `Authentication endpoint not found. Please verify the Striim URL.`;
+    } else if (error.response?.status === 401) {
+      errorMessage = 'Invalid username or password';
+    } else if (error.response?.data?.message) {
+      errorMessage = error.response.data.message;
+    } else {
+      errorMessage = error.message;
+    }
+
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: errorMessage
+    });
+  }
+});
+
+// Striim Mon Command endpoint
+app.post('/api/striim-mon-command', async (req, res) => {
+  try {
+    let { striimUrl, token, namespace, sourceName } = req.body;
+
+    // Validation
+    if (!striimUrl || !token || !namespace || !sourceName) {
+      return res.status(400).json({
+        success: false,
+        message: 'All fields are required: striimUrl, token, namespace, sourceName'
+      });
+    }
+
+    // Clean up the URL - remove trailing slash if present
+    striimUrl = striimUrl.trim().replace(/\/+$/, '');
+
+    const fullSourceName = `${namespace}.${sourceName}`;
+    const monCommand = `mon ${fullSourceName};`;
+
+    console.log(`Executing mon command: ${monCommand}`);
+
+    // Execute mon command
+    const commandResponse = await axios.post(
+      `${striimUrl}/api/v2/tungsten`,
+      monCommand,
+      {
+        headers: {
+          'Authorization': `STRIIM-TOKEN ${token}`,
+          'Content-Type': 'text/plain'
+        },
+        timeout: 15000
+      }
+    );
+
+    console.log('Mon command response:', JSON.stringify(commandResponse.data, null, 2));
+
+    // Extract metrics from response
+    let metrics = {};
+
+    if (Array.isArray(commandResponse.data) && commandResponse.data.length > 0) {
+      const firstItem = commandResponse.data[0];
+      if (firstItem.output && Array.isArray(firstItem.output) && firstItem.output.length > 0) {
+        const dataItem = firstItem.output[0];
+
+        // Extract the specific metrics we want
+        const metricsToExtract = [
+          'Last Event Position',
+          'Last Event Read Age',
+          'Latest Activity',
+          'Memory Usage Apply Session',
+          'Memory Usage Capture Session',
+          'Memory Usage LogMiner Session',
+          'Memory Usage Streams Pool',
+          'Read Timestamp',
+          'Timestamp'
+        ];
+
+        metricsToExtract.forEach(metricName => {
+          if (dataItem[metricName] !== undefined) {
+            metrics[metricName] = dataItem[metricName];
+          }
+        });
+      }
+    }
+
+    if (Object.keys(metrics).length === 0) {
+      return res.status(500).json({
+        success: false,
+        message: 'No metrics found in response',
+        rawResponse: commandResponse.data
+      });
+    }
+
+    res.json({
+      success: true,
+      metrics: metrics
+    });
+
+  } catch (error) {
+    console.error('Mon command error:', error.message);
+
+    let errorMessage = 'Failed to execute mon command';
+
+    if (error.code === 'ECONNREFUSED') {
+      errorMessage = `Cannot connect to Striim. Please check the URL.`;
+    } else if (error.response?.status === 401) {
+      errorMessage = 'Authentication token expired or invalid';
+    } else if (error.response?.data?.message) {
+      errorMessage = error.response.data.message;
+    } else {
+      errorMessage = error.message;
+    }
+
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: errorMessage
+    });
+  }
+});
+
+// OJET Queries - Capture Process Status
+app.post('/api/ojet-queries/capture-status', async (req, res) => {
+  let connection;
+  try {
+    const { host, port, sid, username, password } = req.body;
+
+    // Create a temporary pool for this query
+    const poolToUse = await getOrCreatePool({ host, port, sid, username, password });
+
+    connection = await poolToUse.getConnection();
+
+    const query = `SELECT CAPTURE_NAME, QUEUE_OWNER, CAPTURE_USER,
+       START_SCN, CAPTURED_SCN, APPLIED_SCN, SOURCE_DATABASE, CAPTURE_TYPE, ERROR_MESSAGE,
+       FIRST_SCN, REQUIRED_CHECKPOINT_SCN, STATUS
+FROM DBA_CAPTURE`;
+
+    const result = await connection.execute(query, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+
+    res.json({
+      success: true,
+      results: result.rows
+    });
+  } catch (error) {
+    console.error('Error executing capture status query:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error('Error closing connection:', err);
+      }
+    }
+  }
+});
+
+// OJET Queries - Propagation Receiver
+app.post('/api/ojet-queries/propagation-receiver', async (req, res) => {
+  let connection;
+  try {
+    const { host, port, sid, username, password } = req.body;
+
+    const poolToUse = await getOrCreatePool({ host, port, sid, username, password });
+
+    connection = await poolToUse.getConnection();
+
+    const query = `SELECT TOTAL_MSGS,
+       TO_CHAR(HIGH_WATER_MARK) AS HIGHEST_MESS_SCN_RECEIVED,
+       TO_CHAR(ACKNOWLEDGEMENT) AS HIGHEST_MESS_ACKNOWLEDGE_TO_SENDER,
+       STATE
+FROM GV$PROPAGATION_RECEIVER`;
+
+    const result = await connection.execute(query, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+
+    res.json({
+      success: true,
+      results: result.rows
+    });
+  } catch (error) {
+    console.error('Error executing propagation receiver query:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error('Error closing connection:', err);
+      }
+    }
+  }
+});
+
+// OJET Queries - Capture Process Memory Usage
+app.post('/api/ojet-queries/capture-memory', async (req, res) => {
+  let connection;
+  try {
+    const { host, port, sid, username, password } = req.body;
+
+    const poolToUse = await getOrCreatePool({ host, port, sid, username, password });
+
+    connection = await poolToUse.getConnection();
+
+    const query = `SELECT CAPTURE_NAME, STATE,
+       TOTAL_MESSAGES_CAPTURED,
+       ROUND(SGA_USED / 1024 / 1024, 2) AS USED_MB,
+       ROUND(SGA_ALLOCATED / 1024 / 1024, 2) AS ALLOCATED_MB,
+       ROUND((SGA_USED / NULLIF(SGA_ALLOCATED, 0)) * 100, 2) AS MEM_UTIL_PCT,
+       ROUND((SYSDATE - CAPTURE_TIME) * 86400, 0) AS LAG_SEC
+FROM V$XSTREAM_CAPTURE`;
+
+    const result = await connection.execute(query, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+
+    res.json({
+      success: true,
+      results: result.rows
+    });
+  } catch (error) {
+    console.error('Error executing capture memory query:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error('Error closing connection:', err);
+      }
+    }
+  }
+});
+
+// OJET Queries - Apply Process Memory Usage
+app.post('/api/ojet-queries/apply-memory', async (req, res) => {
+  let connection;
+  try {
+    const { host, port, sid, username, password } = req.body;
+
+    const poolToUse = await getOrCreatePool({ host, port, sid, username, password });
+
+    connection = await poolToUse.getConnection();
+
+    const query = `SELECT r.INST_ID, ap.APPLY_NAME, r.STATE,
+       r.TOTAL_MESSAGES_DEQUEUED AS MSGS_TO_STRIIM,
+       ROUND(r.SGA_USED / 1024 / 1024, 2) AS USED_MB,
+       ROUND(r.SGA_ALLOCATED / 1024 / 1024, 2) AS ALLOC_MB,
+       ROUND((r.SGA_USED / NULLIF(r.SGA_ALLOCATED, 0)) * 100, 2) AS MEM_UTIL_PCT
+FROM GV$XSTREAM_APPLY_READER r
+JOIN GV$SESSION s ON (r.SID = s.SID AND r.SERIAL# = s.SERIAL# AND r.INST_ID = s.INST_ID)
+JOIN DBA_APPLY ap ON (r.APPLY_NAME = ap.APPLY_NAME)
+ORDER BY r.INST_ID, ap.APPLY_NAME`;
+
+    const result = await connection.execute(query, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+
+    res.json({
+      success: true,
+      results: result.rows
+    });
+  } catch (error) {
+    console.error('Error executing apply memory query:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error('Error closing connection:', err);
+      }
+    }
+  }
+});
+
+// OJET Queries - Streams Pool Memory Usage
+app.post('/api/ojet-queries/streams-pool', async (req, res) => {
+  let connection;
+  try {
+    const { host, port, sid, username, password } = req.body;
+
+    const poolToUse = await getOrCreatePool({ host, port, sid, username, password });
+
+    connection = await poolToUse.getConnection();
+
+    const query = `SELECT ROUND(CURRENT_SIZE / 1024 / 1024, 2) AS STREAM_POOL_TOTAL_MB,
+       ROUND((CURRENT_SIZE - TOTAL_MEMORY_ALLOCATED) / 1024 / 1024, 2) AS STREAM_POOL_FREE_MB,
+       ROUND((TOTAL_MEMORY_ALLOCATED / NULLIF(CURRENT_SIZE, 0)) * 100, 2) AS STREAM_POOL_USAGE_PCT
+FROM V$STREAMS_POOL_STATISTICS`;
+
+    const result = await connection.execute(query, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+
+    res.json({
+      success: true,
+      results: result.rows
+    });
+  } catch (error) {
+    console.error('Error executing streams pool query:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error('Error closing connection:', err);
+      }
+    }
+  }
+});
+
+// OJET Queries - Database Memory Parameters
+app.post('/api/ojet-queries/db-memory-params', async (req, res) => {
+  let connection;
+  try {
+    const { host, port, sid, username, password } = req.body;
+
+    const poolToUse = await getOrCreatePool({ host, port, sid, username, password });
+
+    connection = await poolToUse.getConnection();
+
+    const query = `SELECT NAME, VALUE
+FROM V$PARAMETER
+WHERE NAME IN ('sga_target','sga_max_size','shared_pool_size','large_pool_size',
+               'java_pool_size','streams_pool_size','memory_max_target','memory_target','db_cache_size')
+ORDER BY NAME`;
+
+    const result = await connection.execute(query, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+
+    res.json({
+      success: true,
+      results: result.rows
+    });
+  } catch (error) {
+    console.error('Error executing db memory params query:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error('Error closing connection:', err);
+      }
+    }
+  }
+});
+
+// OJET Queries - Transactions Being Processed
+app.post('/api/ojet-queries/transactions-processing', async (req, res) => {
+  let connection;
+  try {
+    const { host, port, sid, username, password } = req.body;
+
+    const poolToUse = await getOrCreatePool({ host, port, sid, username, password });
+
+    connection = await poolToUse.getConnection();
+
+    const query = `SELECT COMPONENT_NAME, COMPONENT_TYPE,
+       (XIDUSN || '.' || XIDSLT || '.' || XIDSQN) AS TRAN_ID,
+       CUMULATIVE_MESSAGE_COUNT,
+       TOTAL_MESSAGE_COUNT,
+       FIRST_MESSAGE_POSITION
+FROM V$XSTREAM_TRANSACTION`;
+
+    const result = await connection.execute(query, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+
+    res.json({
+      success: true,
+      results: result.rows
+    });
+  } catch (error) {
+    console.error('Error executing transactions processing query:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error('Error closing connection:', err);
+      }
+    }
+  }
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
@@ -442,6 +1354,51 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Cleanup endpoint - called when browser/tab is closed
+app.post('/api/cleanup', async (req, res) => {
+  console.log('Cleanup request received from client');
+
+  try {
+    // Close all connection pools
+    if (connectionPools.size > 0) {
+      console.log(`Closing ${connectionPools.size} connection pool(s) due to client disconnect...`);
+
+      const closePromises = [];
+      for (const [key, poolInstance] of connectionPools.entries()) {
+        console.log(`Closing pool: ${key}`);
+        closePromises.push(
+          poolInstance.close(5).catch(err => {
+            console.error(`Error closing pool ${key}:`, err.message);
+          })
+        );
+      }
+
+      await Promise.all(closePromises);
+      connectionPools.clear();
+      console.log('All connection pools closed successfully');
+    }
+
+    // Close legacy pool if it exists
+    if (pool) {
+      console.log('Closing legacy connection pool...');
+      await pool.close(5);
+      pool = null;
+      console.log('Legacy pool closed successfully');
+    }
+
+    res.json({
+      success: true,
+      message: 'Cleanup completed successfully'
+    });
+  } catch (error) {
+    console.error('Error during cleanup:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Cleanup failed'
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`OJET Troubleshooter API running on port ${PORT}`);
@@ -449,13 +1406,61 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, closing connection pool...');
-  if (pool) {
-    await pool.close(10);
+// Graceful shutdown function
+async function gracefulShutdown(signal) {
+  console.log(`\n${signal} received, closing all database connections...`);
+
+  try {
+    // Close all connection pools in the Map
+    if (connectionPools.size > 0) {
+      console.log(`Closing ${connectionPools.size} connection pool(s)...`);
+
+      const closePromises = [];
+      for (const [key, poolInstance] of connectionPools.entries()) {
+        console.log(`Closing pool: ${key}`);
+        closePromises.push(
+          poolInstance.close(10).catch(err => {
+            console.error(`Error closing pool ${key}:`, err.message);
+          })
+        );
+      }
+
+      await Promise.all(closePromises);
+      connectionPools.clear();
+      console.log('All connection pools closed successfully');
+    }
+
+    // Close legacy pool if it exists
+    if (pool) {
+      console.log('Closing legacy connection pool...');
+      await pool.close(10);
+      pool = null;
+      console.log('Legacy pool closed successfully');
+    }
+
+    console.log('Graceful shutdown completed');
+    process.exit(0);
+  } catch (error) {
+    console.error('Error during graceful shutdown:', error);
+    process.exit(1);
   }
-  process.exit(0);
+}
+
+// Handle different shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));  // Ctrl+C
+process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));   // Terminal closed
+
+// Handle uncaught exceptions
+process.on('uncaughtException', async (error) => {
+  console.error('Uncaught Exception:', error);
+  await gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', async (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  await gracefulShutdown('UNHANDLED_REJECTION');
 });
 
 

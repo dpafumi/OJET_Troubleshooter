@@ -3,13 +3,35 @@ import { FileText, Database, Activity, GitBranch, Settings, CheckCircle, XCircle
 import axios from 'axios'
 import CheckCard from './CheckCard'
 
-function Dashboard({ dbConfig, setDbConfig, isConnected, setIsConnected }) {
+function DashboardDownstream({
+  dbConfigPrimary,
+  setDbConfigPrimary,
+  isConnectedPrimary,
+  setIsConnectedPrimary,
+  dbConfigDownstream,
+  setDbConfigDownstream,
+  isConnectedDownstream,
+  setIsConnectedDownstream
+}) {
+  // Primary DB connection states (UI only)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
 
+  // Downstream DB connection states (UI only)
+  const [loadingDownstream, setLoadingDownstream] = useState(false)
+  const [messageDownstream, setMessageDownstream] = useState('')
+
   const handleInputChange = (e) => {
     const { name, value } = e.target
-    setDbConfig(prev => ({
+    setDbConfigPrimary(prev => ({
+      ...prev,
+      [name]: value
+    }))
+  }
+
+  const handleInputChangeDownstream = (e) => {
+    const { name, value } = e.target
+    setDbConfigDownstream(prev => ({
       ...prev,
       [name]: value
     }))
@@ -20,32 +42,55 @@ function Dashboard({ dbConfig, setDbConfig, isConnected, setIsConnected }) {
     setMessage('')
 
     try {
-      const response = await axios.post('/api/test-connection', dbConfig)
+      const response = await axios.post('/api/test-connection', dbConfigPrimary)
 
       if (response.data.success) {
-        setIsConnected(true)
+        setIsConnectedPrimary(true)
         setMessage('Connection successful!')
       } else {
-        setIsConnected(false)
+        setIsConnectedPrimary(false)
         setMessage(response.data.message || 'Connection failed')
       }
     } catch (error) {
-      setIsConnected(false)
+      setIsConnectedPrimary(false)
       setMessage(error.response?.data?.message || error.message || 'Connection failed')
     } finally {
       setLoading(false)
     }
   }
+
+  const handleConnectDownstream = async () => {
+    setLoadingDownstream(true)
+    setMessageDownstream('')
+
+    try {
+      const response = await axios.post('/api/test-connection', dbConfigDownstream)
+
+      if (response.data.success) {
+        setIsConnectedDownstream(true)
+        setMessageDownstream('Connection successful!')
+      } else {
+        setIsConnectedDownstream(false)
+        setMessageDownstream(response.data.message || 'Connection failed')
+      }
+    } catch (error) {
+      setIsConnectedDownstream(false)
+      setMessageDownstream(error.response?.data?.message || error.message || 'Connection failed')
+    } finally {
+      setLoadingDownstream(false)
+    }
+  }
   const checks = [
     {
       id: 'dictionary-dumps',
-      title: 'Existing Dictionary Dumps',
+      title: 'Existing Dictionary Dumps in Primary DB',
       description: 'Verify LogMiner dictionary builds are present and valid.',
       icon: FileText,
       iconBg: '#dbeafe',
       iconColor: '#2563eb',
       endpoint: '/api/check/dictionary-dumps',
       requiresParams: false,
+      dbConnection: 'prod', // Uses Primary DB connection
       query: `-- If Arch Log Files are "crossed" (BEGIN = Y in 1 row and END=Y on the previous row),
 -- that is fine, perhaps BUILD was not able to fit in 1 ARCH LOG FILE
 
@@ -59,7 +104,7 @@ ORDER BY SEQUENCE# DESC;`
     },
     {
       id: 'take-dictionary-dump',
-      title: 'Take Dictionary Dump',
+      title: 'Take Dictionary Dump in Primary DB',
       description: 'Execute DBMS_LOGMNR_D.BUILD to create a new dictionary dump, if needed.',
       icon: FileText,
       iconBg: '#e0e7ff',
@@ -67,6 +112,7 @@ ORDER BY SEQUENCE# DESC;`
       endpoint: '/api/action/build-dictionary',
       requiresParams: false,
       isAction: true,
+      dbConnection: 'prod', // Uses Primary DB connection
       query: `-- This will be executed:
 EXECUTE DBMS_LOGMNR_D.BUILD(
   options => DBMS_LOGMNR_D.STORE_IN_REDO_LOGS
@@ -80,13 +126,14 @@ EXECUTE DBMS_LOGMNR_D.BUILD(
     },
     {
       id: 'table-instantiation',
-      title: 'Table Instantiation',
+      title: 'Table Instantiation in Primary DB',
       description: 'Check if tables are properly instantiated and ready for CDC.',
       icon: Database,
       iconBg: '#d1fae5',
       iconColor: '#10b981',
       endpoint: '/api/check/table-instantiation',
       requiresParams: true,
+      dbConnection: 'prod', // Uses Primary DB connection
       params: [
         { name: 'tableOwner', label: 'Table Owner', placeholder: 'SCHEMA_NAME' },
         { name: 'tableNames', label: 'Table Names (comma-separated)', placeholder: 'TABLE1,TABLE2' }
@@ -104,13 +151,14 @@ WHERE table_owner = :tableOwner
     },
     {
       id: 'scn-validation',
-      title: 'SCN Validation',
+      title: 'SCN Validation in Downstream DB',
       description: 'Validate SCN consistency for dictionary dumps and table instantiation.',
       icon: GitBranch,
       iconBg: '#fef3c7',
       iconColor: '#f59e0b',
       endpoint: '/api/check/scn-validation',
       requiresParams: true,
+      dbConnection: 'prod', // Uses Primary DB connection
       params: [
         { name: 'tableOwner', label: 'Table Owner', placeholder: 'SCHEMA_NAME' },
         { name: 'tableNames', label: 'Table Names (comma-separated)', placeholder: 'TABLE1,TABLE2' }
@@ -122,27 +170,52 @@ WHERE TABLE_OWNER = :tableOwner
     },
     {
       id: 'open-transactions',
-      title: 'Open Transactions',
+      title: 'Open Transactions in Primary DB',
       description: 'Identify long-running open transactions that can block OJET operations',
       icon: Activity,
       iconBg: '#fee2e2',
       iconColor: '#ef4444',
       endpoint: '/api/check/open-transactions',
       requiresParams: false,
+      dbConnection: 'prod', // Uses Primary DB connection
       query: `SELECT MIN(START_TIME) as MIN_START_TIME,
        MIN(START_SCN) as MIN_START_SCN,
        COUNT(*) as OPEN_TXN_COUNT
 FROM GV$TRANSACTION;`
     },
     {
-      id: 'check-db-values',
-      title: 'Check Other DB Values',
-      description: 'Review critical database parameters and configuration values for OJET',
+      id: 'placeholder',
+      title: '',
+      description: '',
+      isPlaceholder: true
+    },
+    {
+      id: 'check-db-values-primary',
+      title: 'Check Other DB Values in Primary DB',
+      description: 'Review critical database parameters and configuration values for OJET in Primary DB',
+      icon: Settings,
+      iconBg: '#dbeafe',
+      iconColor: '#3b82f6',
+      endpoint: '/api/check/db-values',
+      requiresParams: false,
+      dbConnection: 'prod', // Uses Primary DB connection
+      query: `SELECT name,value from v$parameter
+where name in ('db_name','db_unique_name','log_archive_dest_1','enable_goldengate_replication', 'log_archive_dest_2','log_archive_dest_state_1','log_archive_dest_state_2','fal_client','fal_server','standby_file_management','dg_broker_start','dg_broker_config_file1','dg_broker_config_file2','log_archive_config','service_names','streams_pool_size')
+and value is not null
+union
+select 'global_name' as name, GLOBAL_NAME  FROM global_name
+order by name;`
+    },
+    {
+      id: 'check-db-values-downstream',
+      title: 'Check Other DB Values in Downstream DB',
+      description: 'Review critical database parameters and configuration values for OJET in Downstream DB',
       icon: Settings,
       iconBg: '#f3e8ff',
       iconColor: '#9333ea',
       endpoint: '/api/check/db-values',
       requiresParams: false,
+      dbConnection: 'downstream', // Uses Downstream connection
       query: `SELECT name,value from v$parameter
 where name in ('db_name','db_unique_name','log_archive_dest_1','enable_goldengate_replication', 'log_archive_dest_2','log_archive_dest_state_1','log_archive_dest_state_2','fal_client','fal_server','standby_file_management','dg_broker_start','dg_broker_config_file1','dg_broker_config_file2','log_archive_config','service_names','streams_pool_size')
 and value is not null
@@ -155,8 +228,8 @@ order by name;`
   return (
     <div className="main-content">
       <div className="header">
-        <h1>OJET Validation PROD</h1>
-        <p>Validation & Diagnostics Dashboard for OJET Running in PROD DB Server</p>
+        <h1>OJET Validation Downstream</h1>
+        <p>Validation & Diagnostics Dashboard for OJET Running in Downstream DB Server</p>
       </div>
 
       {/* Documentation Link */}
@@ -188,7 +261,7 @@ order by name;`
         </span>
       </div>
 
-      {/* Database Connection Form */}
+      {/* Database Connection Form - Primary DB */}
       <div style={{
         backgroundColor: '#ffffff',
         border: '1px solid #e5e7eb',
@@ -199,10 +272,10 @@ order by name;`
       }}>
         <div style={{ marginBottom: '20px' }}>
           <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', marginBottom: '4px' }}>
-            Database Connection
+            Database Connection to Primary DB
           </h2>
           <p style={{ fontSize: '14px', color: '#6b7280' }}>
-            Enter Oracle database credentials
+            Enter Oracle database credentials for Primary DB
           </p>
         </div>
 
@@ -215,7 +288,7 @@ order by name;`
               type="text"
               id="host"
               name="host"
-              value={dbConfig.host}
+              value={dbConfigPrimary.host}
               onChange={handleInputChange}
               placeholder="localhost"
               style={{
@@ -236,7 +309,7 @@ order by name;`
               type="text"
               id="port"
               name="port"
-              value={dbConfig.port}
+              value={dbConfigPrimary.port}
               onChange={handleInputChange}
               placeholder="1521"
               style={{
@@ -257,7 +330,7 @@ order by name;`
               type="text"
               id="sid"
               name="sid"
-              value={dbConfig.sid}
+              value={dbConfigPrimary.sid}
               onChange={handleInputChange}
               placeholder="ORCL"
               style={{
@@ -278,7 +351,7 @@ order by name;`
               type="text"
               id="username"
               name="username"
-              value={dbConfig.username}
+              value={dbConfigPrimary.username}
               onChange={handleInputChange}
               placeholder="OJET_USER"
               style={{
@@ -299,7 +372,7 @@ order by name;`
               type="password"
               id="password"
               name="password"
-              value={dbConfig.password}
+              value={dbConfigPrimary.password}
               onChange={handleInputChange}
               placeholder="••••••••"
               autoComplete="new-password"
@@ -318,7 +391,7 @@ order by name;`
           <button
             className="btn btn-primary"
             onClick={handleConnect}
-            disabled={loading || !dbConfig.host || !dbConfig.username || !dbConfig.password}
+            disabled={loading || !dbConfigPrimary.host || !dbConfigPrimary.username || !dbConfigPrimary.password}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -349,16 +422,16 @@ order by name;`
               padding: '8px 12px',
               borderRadius: '6px',
               fontSize: '14px',
-              backgroundColor: isConnected ? '#d1fae5' : '#fee2e2',
-              color: isConnected ? '#065f46' : '#991b1b'
+              backgroundColor: isConnectedPrimary ? '#d1fae5' : '#fee2e2',
+              color: isConnectedPrimary ? '#065f46' : '#991b1b'
             }}>
-              {isConnected ? <CheckCircle size={16} /> : <XCircle size={16} />}
+              {isConnectedPrimary ? <CheckCircle size={16} /> : <XCircle size={16} />}
               {message}
             </div>
           )}
         </div>
 
-        {isConnected && (
+        {isConnectedPrimary && (
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -371,14 +444,202 @@ order by name;`
             color: '#065f46'
           }}>
             <CheckCircle size={16} />
-            Connected to {dbConfig.host}:{dbConfig.port}/{dbConfig.sid}
+            Connected to {dbConfigPrimary.host}:{dbConfigPrimary.port}/{dbConfigPrimary.sid}
           </div>
         )}
       </div>
 
-      {!isConnected && (
+      {/* Database Connection Form - Downstream */}
+      <div style={{
+        backgroundColor: '#ffffff',
+        border: '1px solid #e5e7eb',
+        borderRadius: '8px',
+        padding: '24px',
+        marginBottom: '24px',
+        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
+      }}>
+        <div style={{ marginBottom: '20px' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', marginBottom: '4px' }}>
+            Database Connection to Downstream DB
+          </h2>
+          <p style={{ fontSize: '14px', color: '#6b7280' }}>
+            Enter Oracle database credentials for Downstream
+          </p>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '16px' }}>
+          <div className="form-group">
+            <label htmlFor="host-downstream" style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+              Host
+            </label>
+            <input
+              type="text"
+              id="host-downstream"
+              name="host"
+              value={dbConfigDownstream.host}
+              onChange={handleInputChangeDownstream}
+              placeholder="localhost"
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px',
+                fontSize: '14px'
+              }}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="port-downstream" style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+              Port
+            </label>
+            <input
+              type="text"
+              id="port-downstream"
+              name="port"
+              value={dbConfigDownstream.port}
+              onChange={handleInputChangeDownstream}
+              placeholder="1521"
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px',
+                fontSize: '14px'
+              }}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="sid-downstream" style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+              SID / Service Name
+            </label>
+            <input
+              type="text"
+              id="sid-downstream"
+              name="sid"
+              value={dbConfigDownstream.sid}
+              onChange={handleInputChangeDownstream}
+              placeholder="ORCL"
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px',
+                fontSize: '14px'
+              }}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="username-downstream" style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+              Username
+            </label>
+            <input
+              type="text"
+              id="username-downstream"
+              name="username"
+              value={dbConfigDownstream.username}
+              onChange={handleInputChangeDownstream}
+              placeholder="OJET_USER"
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px',
+                fontSize: '14px'
+              }}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="password-downstream" style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+              Password
+            </label>
+            <input
+              type="password"
+              id="password-downstream"
+              name="password"
+              value={dbConfigDownstream.password}
+              onChange={handleInputChangeDownstream}
+              placeholder="••••••••"
+              autoComplete="new-password"
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px',
+                fontSize: '14px'
+              }}
+            />
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button
+            className="btn btn-primary"
+            onClick={handleConnectDownstream}
+            disabled={loadingDownstream || !dbConfigDownstream.host || !dbConfigDownstream.username || !dbConfigDownstream.password}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 20px',
+              fontSize: '14px',
+              fontWeight: '500'
+            }}
+          >
+            {loadingDownstream ? (
+              <>
+                <span className="loading-spinner"></span>
+                Connecting...
+              </>
+            ) : (
+              <>
+                <Database size={18} />
+                Connect to Database
+              </>
+            )}
+          </button>
+
+          {messageDownstream && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 12px',
+              borderRadius: '6px',
+              fontSize: '14px',
+              backgroundColor: isConnectedDownstream ? '#d1fae5' : '#fee2e2',
+              color: isConnectedDownstream ? '#065f46' : '#991b1b'
+            }}>
+              {isConnectedDownstream ? <CheckCircle size={16} /> : <XCircle size={16} />}
+              {messageDownstream}
+            </div>
+          )}
+        </div>
+
+        {isConnectedDownstream && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            marginTop: '12px',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            fontSize: '14px',
+            backgroundColor: '#d1fae5',
+            color: '#065f46'
+          }}>
+            <CheckCircle size={16} />
+            Connected to {dbConfigDownstream.host}:{dbConfigDownstream.port}/{dbConfigDownstream.sid}
+          </div>
+        )}
+      </div>
+
+      {(!isConnectedPrimary || !isConnectedDownstream) && (
         <div className="error-message">
-          Please connect to the Oracle database using the form above to run checks.
+          Please connect to both Oracle databases using the forms above to run checks.
         </div>
       )}
 
@@ -387,7 +648,11 @@ order by name;`
           <CheckCard
             key={check.id}
             check={check}
-            isConnected={isConnected}
+            isConnected={isConnectedPrimary && isConnectedDownstream}
+            dbConfigProd={dbConfigPrimary}
+            dbConfigDownstream={dbConfigDownstream}
+            isConnectedProd={isConnectedPrimary}
+            isConnectedDownstream={isConnectedDownstream}
           />
         ))}
       </div>
@@ -395,5 +660,5 @@ order by name;`
   )
 }
 
-export default Dashboard
+export default DashboardDownstream
 

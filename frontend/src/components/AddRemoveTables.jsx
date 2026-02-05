@@ -4,7 +4,7 @@ function AddRemoveTables() {
   const removeSteps = [
     {
       step: 1,
-      title: 'Stop the OJET App',
+      title: 'Stop the OJET App (suggestion: Check that there are not OLD Open Transactions)',
       description: 'Stop the OJET application',
       color: '#ef4444'
     },
@@ -25,20 +25,20 @@ function AddRemoveTables() {
   const addStepsDisabled = [
     {
       step: 1,
-      title: 'Stop the OJET App',
+      title: 'Stop the OJET App (suggestion: Check that there are not OLD Open Transactions)',
       description: 'Stop the OJET application',
       color: '#3b82f6'
     },
     {
       step: 2,
       title: 'Run Dictionary Build',
-      description: 'Execute dictionary build process',
+      description: 'Execute dictionary build process. exec DBMS_LOGMNR_D.BUILD( options => DBMS_LOGMNR_D.STORE_IN_REDO_LOGS);',
       color: '#3b82f6'
     },
     {
       step: 3,
       title: 'Perform Table Instantiation for the new tables',
-      description: 'Prepare tables for CDC',
+      description: 'Prepare tables for CDC. exec DBMS_CAPTURE_ADM.PREPARE_TABLE_INSTANTIATION(table_name => \'OWNER.TABLE_NAME\', supplemental_logging => \'NONE\', container=> \'CURRENT\')',
       color: '#3b82f6'
     },
     {
@@ -62,7 +62,13 @@ function AddRemoveTables() {
     {
       step: '7',
       title: 'Once IL is completd, Start OJET App',
-      description: 'SRestart the OJET application with new configuration',
+      description: 'Restart the OJET application with new configuration',
+      color: '#3b82f6'
+    },
+    {
+      step: '8',
+      title: 'LAter, Remove IgnorableExceptionCodes (optional)',
+      description: 'Once RECOVERY_SCN is higherr than the MAX(SCN) value collected before, you can remove the IgnorableExceptionCodes',
       color: '#3b82f6'
     }
   ]
@@ -71,13 +77,13 @@ function AddRemoveTables() {
     {
       step: 1,
       title: 'Run Dictionary Build',
-      description: 'Execute Dictionary Build',
+      description: 'Execute Dictionary Build. execute DBMS_LOGMNR_D.BUILD( options => DBMS_LOGMNR_D.STORE_IN_REDO_LOGS);',
       color: '#10b981'
     },
     {
       step: 2,
       title: 'Perform Table Instantiation for the new tables',
-      description: 'Prepare new tables',
+      description: 'Prepare new tables. exec DBMS_CAPTURE_ADM.PREPARE_TABLE_INSTANTIATION(table_name => \'OWNER.TABLE_NAME\', supplemental_logging => \'NONE\', container=> \'CURRENT\')',
       color: '#10b981'
     },
     {
@@ -102,16 +108,22 @@ function AddRemoveTables() {
     },
     {
       step: 6,
-      title: 'Stop, Undeploy, Export and Drop the OJET App',
-      description: 'This step will clean up existing OJET deployment',
+      title: 'Stop, Undeploy, Export and Drop the OJET App (suggestion: Check that there are not OLD Open Transactions)',
+      description: 'This step will clean up existing OJET deployment. Take a note of the RECOVERY_SCN',
       color: '#10b981'
     },
     {
       step: 7,
+      title: 'Perform IL for the new Tables',
+      description: 'Execute IL, remember to Enable Quiesce On IL Completion',
+      color: '#10b981'
+    },
+    {
+      step: 8,
       title: 'Alter OJET Application TQL and add the new tables. For StartSCN, use the number captured on Step 3. Add IgnorableExceptionCodes',
       descriptionLines: [
         'Update TQL Code to include new tables in Source and Target.',
-        'Modify StartSCN with the value captured on Step 3.',
+        'Modify StartSCN with the value captured on Step 6.',
         'Also add IgnorableExceptionCode: DUPLICATE_ROW_EXISTS,NO_OP_UPDATE,NO_OP_PKUPDATE,NO_OP_DELETE to the Target'
       ],
       color: '#10b981'

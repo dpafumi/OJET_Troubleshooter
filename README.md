@@ -5,12 +5,16 @@ This is an application for technical diagnosis and validation of Oracle OJET.
 ## 🎯 Features
 
 ### 📄 Multiple Pages
-- **OJET Validation**: Technical validation dashboard with 6 automated checks
+- **OJET Validation PROD**: Technical validation dashboard with 6 automated checks for production database
+- **OJET Validation Downstream**: Dual-database validation dashboard with 8 checks for downstream/replica scenarios
 - **OJET Troubleshooting**: Common problems and solutions guide
-- **Show Commands**: OJET command reference with examples
+- **Show Commands**: OJET command reference with examples and field explanations
 - **Add/Remove Tables**: Step-by-step guides for table management
+- **Monitor**: Real-time monitoring of OJET sources via Striim REST API
 
 ### 🔍 Technical Validations
+
+#### Validation PROD (Single Database)
 - **Oracle Connection**: Sidebar for database credentials
 - **6 Validation Categories**:
   - **Dictionary Dumps**: LogMiner dictionary file verification
@@ -19,11 +23,36 @@ This is an application for technical diagnosis and validation of Oracle OJET.
   - **Open Transactions**: Identification of long-running open transactions
   - **Check Other DB Values**: Critical database parameters and configuration
 
+#### Validation Downstream (Dual Database)
+- **Two Independent Database Connections**:
+  - Primary DB (Production/Source database)
+  - Downstream DB (Downstream/Replica database)
+- **8 Validation Categories** with smart connection routing:
+  - **Existing Dictionary Dumps in Primary DB** → Uses Primary DB
+  - **Take Dictionary Dump in Primary DB** → Uses Primary DB
+  - **Table Instantiation in Primary DB** → Uses Primary DB
+  - **SCN Validation in Downstream DB** → Uses Primary DB (compares with Downstream)
+  - **Open Transactions in Primary DB** → Uses Primary DB
+  - **Check Other DB Values in Primary DB** → Uses Primary DB
+  - **Check Other DB Values in Downstream DB** → Uses Downstream DB
+- **Persistent Credentials**: Database credentials saved when navigating between pages
+- **Color-Coded Cards**: Blue for Primary DB checks, Purple for Downstream DB checks
+
 ### 🔧 Automated Corrective Actions
 - **Build Dictionary**: Executes `DBMS_LOGMNR_D.BUILD` to create dictionary dumps
 - **Prepare Tables**: Executes `DBMS_CAPTURE_ADM.PREPARE_TABLE_INSTANTIATION` to prepare tables
+- **Smart Database Routing**: Automatically uses the correct database connection for each action
 - Confirmation before execution
 - Detailed result feedback
+
+### 🗄️ Multi-Database Support
+- **Independent Connection Pools**: Backend maintains separate connection pools for each database
+- **Automatic Pool Management**: Reuses existing pools, creates new ones as needed
+- **Graceful Shutdown**: Automatically closes all database connections on exit
+  - Handles Ctrl+C, SIGTERM, SIGHUP signals
+  - Closes connections when browser/tab is closed
+  - Prevents orphaned database connections
+- **Memory Efficient**: Proper cleanup and resource management
 
 ### 🛠️ Integrated Troubleshooting
 - Documented common problems
@@ -34,8 +63,24 @@ This is an application for technical diagnosis and validation of Oracle OJET.
 ### 📚 Command Reference
 - OJET commands organized by category
 - Practical examples
-- Sample outputs
+- Sample outputs with ASCII tables
+- Detailed field explanations for Status and Memory commands
 - Copy to clipboard function
+
+### 📊 Real-Time Monitoring
+- **Striim REST API Integration**: Connect to Striim server to monitor OJET sources
+- **Automated Commands**: Execute status and memory commands via API
+- **Persistent Configuration**: Form values saved in localStorage for convenience
+- **ASCII Table Output**: Clean, formatted tables with text wrapping (30 characters max width)
+- **Enhanced Error Handling**: Detailed diagnostics for connection issues
+  - Network connectivity errors (ECONNREFUSED, ETIMEDOUT, ENOTFOUND)
+  - Authentication errors with specific guidance
+  - Automatic URL cleanup (removes trailing slashes)
+- **4 Monitoring Commands**:
+  - `show <source> status` - General status information
+  - `show <source> status details` - Detailed status with SCN and metrics
+  - `show <source> memory` - Memory usage summary
+  - `show <source> memory details` - Detailed memory breakdown with explanations
 
 ## 🛠️ Technology Stack
 
@@ -123,7 +168,7 @@ chmod +x start.sh stop.sh restart.sh
 ./start.sh
 ```
 
-This will start both backend and frontend servers.
+This will start both backend and frontend servers **in background mode**, returning terminal control immediately.
 
 **URLs:**
 - **Frontend (Web App)**: http://localhost:3000
@@ -137,6 +182,12 @@ This will start both backend and frontend servers.
 **To restart:**
 ```bash
 ./restart.sh
+```
+
+**To view logs:**
+```bash
+tail -f logs/backend.log   # Backend logs
+tail -f logs/frontend.log  # Frontend logs
 ```
 
 ### Manual Execution
@@ -160,12 +211,15 @@ npm run dev
 ## 📖 Usage
 
 ### Navigation
-The application has 3 main pages accessible from the top navigation bar:
-- **Validation**: Technical validations and diagnostics
+The application has 6 main pages accessible from the top navigation bar:
+- **Validation PROD**: Technical validations for production database (single database)
+- **Validation Downstream**: Technical validations for downstream scenarios (dual database)
 - **Troubleshooting**: Common problems and solutions
-- **Show Commands**: OJET command reference
+- **Show Commands**: OJET command reference with field explanations
+- **Add/Remove Tables**: Step-by-step guides for table management
+- **Monitor**: Real-time OJET source monitoring via Striim REST API
 
-### Page: OJET Validation
+### Page: OJET Validation PROD
 
 1. **Connect to Database**:
    - Enter credentials in the left sidebar
@@ -188,7 +242,35 @@ The application has 3 main pages accessible from the top navigation bar:
    - Confirm the action in the confirmation dialog
    - View the detailed operation result
    - Re-run the validation to verify the problem is resolved
-   - See [CORRECTIVE_ACTIONS_GUIDE.md](./CORRECTIVE_ACTIONS_GUIDE.md) for more details
+
+### Page: OJET Validation Downstream
+
+1. **Connect to Primary Database**:
+   - Enter credentials in the first connection form (Primary DB)
+   - Host, Port (1521), SID, Username, Password
+   - Click on "Connect to Primary DB"
+
+2. **Connect to Downstream Database**:
+   - Enter credentials in the second connection form (Downstream DB)
+   - Host, Port (1521), SID, Username, Password
+   - Click on "Connect to Downstream DB"
+
+3. **Run Validations**:
+   - Each card shows which database it uses (Primary or Downstream)
+   - Blue cards use Primary DB connection
+   - Purple cards use Downstream DB connection
+   - Enter required parameters for each check
+   - Click on "Run Check" to execute the SQL query
+   - View results in table format
+
+4. **Persistent Credentials**:
+   - Database credentials are saved when you navigate to other pages
+   - Return to this page without re-entering credentials
+   - Credentials persist until you disconnect or close the browser
+
+5. **🔧 Execute Corrective Actions**:
+   - Same as Validation PROD
+   - Actions automatically use the correct database connection
 
 ### Page: OJET Troubleshooting
 
@@ -204,13 +286,38 @@ The application has 3 main pages accessible from the top navigation bar:
 
 ### Page: Show Commands
 
-1. **Search Commands**:
-   - Commands organized by category
+1. **Browse Commands**:
+   - Commands organized by category (General Information, Memory, etc.)
    - Each command includes description, example, and expected output
 
-2. **Copy to Clipboard**:
+2. **Field Explanations**:
+   - Detailed explanations for each field in Status and Memory commands
+   - Examples of different states (e.g., PROPAGATION_STATE, CaptureState)
+   - Indented, easy-to-read format
+
+3. **Copy to Clipboard**:
    - Click on the copy icon next to each command
    - Visual confirmation when copied
+
+### Page: Monitor
+
+1. **Configure Striim Connection**:
+   - Enter Striim URL (e.g., `http://10.142.0.20:9080`)
+   - Enter username and password
+   - Values are automatically saved in localStorage
+
+2. **Configure Source**:
+   - Enter namespace (e.g., `admin`)
+   - Enter OJET Source Name (e.g., `OJET_SOURCE`)
+
+3. **Monitor Source**:
+   - Click "Monitor Source" to execute all 4 commands
+   - View results in formatted ASCII tables
+   - Tables automatically wrap text at 30 characters for readability
+
+4. **Persistent Values**:
+   - All form values are saved automatically
+   - Navigate to other pages and return without re-entering data
 
 
 ## 🎨 Project Structure
@@ -240,38 +347,11 @@ OJET_Troubleshooter/
 
 - Credentials are NOT stored in the frontend
 - Connection is established via connection pool in the backend
+- Multiple independent connection pools for different databases
+- Automatic cleanup of all connections on application exit
 - Parameter validation before executing queries
 - Robust error handling
 
-## 📦 Portability
-
-This project is fully portable and can be easily transferred to another machine.
-
-### Transfer to Another Machine
-
-**Option 1: Use Package Script**
-```bash
-./package-for-transfer.sh
-```
-
-**Option 2: Copy Entire Folder**
-```bash
-# Copy OJET_Troubleshooter folder to new machine
-# Then run:
-cd OJET_Troubleshooter
-./setup.sh
-./start.sh
-```
-
-**Option 3: Use Git**
-```bash
-git clone <your-repo-url>
-cd OJET_Troubleshooter
-./setup.sh
-./start.sh
-```
-
-See **PORTABILITY_GUIDE.md** for detailed instructions.
 
 ---
 

@@ -21,12 +21,12 @@ function ShowCommands() {
 └─────────────────┴─────────────────┴─────────────────┴─────────────────┴────────────────────────────────┴────────────┴─────────────────┴──────────┘`,
       fieldExplanations: [
         {
-          field: 'CaptureState',
-          description: 'Shows the current progress of the capture process.'
-        },
-        {
           field: 'SpillCount',
           description: 'Shows the number of changes spilled to disk (SYSAUX Tablespace). Higher count here may result into slowness for reading changes.'
+        },
+        {
+          field: 'CaptureState',
+          description: 'Shows the current progress of the capture process. Here are some examples:\n      - INITIALIZING: Starting up. The process is reading the LogMiner dictionary from the redo logs to understand the table structures\n      - CAPTURING CHANGES: Scanning the redo log for changes that satisfy the capture process rule sets.\n      - WAITING FOR REDO: Waiting for new redo log files to be added to the capture process session. The capture process has finished processing all of the redo log files added to its session. This state is possible if there is no activity at a source database. For a downstream capture process, this state is possible if the capture process is waiting for new log files to be added to its session.\n      - WAITING FOR TRANSACTION: Waiting for LogMiner to provide more transactions.'
         }
       ],
       warnings: [
@@ -64,55 +64,55 @@ function ShowCommands() {
       fieldExplanations: [
         {
           field: 'FIRST_SCN',
-          description: 'Indicates the lowest SCN to which the capture can be repositioned.'
+          description: 'The lowest SCN in the redo log from which the capture process can be restarted. Any logs containing SCNs older than this can technically be deleted from the OS level.'
         },
         {
           field: 'START_SCN',
-          description: 'From which the capture process starts to capture changes. If Ojet is taking a long time to publish first event: Check the difference between Start_SCN (starting point of my OJET App) and First_SCN (associated to BUILD).'
+          description: 'The SCN at which the capture process was originally instructed to start. If Ojet is taking a long time to publish first event: Check the difference between Start_SCN (starting point of my OJET App) and First_SCN (associated to BUILD).'
         },
         {
           field: 'APPLIED_SCN',
-          description: 'All changes below this SCN have been captured'
+          description: 'All changes below this SCN have been captured. The SCN of the last message that was successfully sent to and acknowledged by Striim'
         },
         {
           field: 'CAPTURED_SCN',
-          description: 'SCN of the last redo log record scanned. Slowness: Difference between the last published event\'s SCN by Ojet and CAPTURED_SCN value, can help us identify that there is some slowness due to txn caching in Oracle'
+          description: 'The SCN of the most recent change the capture process has read from the redo logs. Slowness: Difference between the last published event\'s SCN by Ojet and CAPTURED_SCN value, can help us identify that there is some slowness due to txn caching in Oracle'
         },
         {
           field: 'OLDEST_SCN',
-          description: 'Oldest SCN of the transactions currently being processed'
+          description: 'The SCN of the oldest currently active (uncommitted) transaction that the capture process is tracking'
         },
         {
           field: 'FILTERED_SCN',
-          description: 'SCN of the low watermark transaction processed'
+          description: 'The SCN of the last message that was filtered out (skipped) because it didn\'t match your Striim selection rules (e.g., a table you aren\'t tracking)'
         },
         {
           field: 'MESSAGES_CAPTURED',
-          description: 'Total number of redo entries passed by LogMiner to the capture process for rule evaluation since the capture process last started'
+          description: 'The total number of Logical Change Records (LCRs) the process found in the redo logs since the capture process last started'
         },
         {
           field: 'MESSAGES_ENQUEUED',
-          description: 'Total number of messages enqueued since the capture process was last started'
+          description: 'The number of messages actually passed to the outbound server'
         },
         {
           field: 'CAPTURE_TIME',
-          description: 'Elapsed time (in hundredths of a second) scanning for changes in the redo log since the capture process was last started'
+          description: 'The timestamp when the last message was captured from the redo log.'
         },
         {
           field: 'RULE_TIME',
-          description: 'Elapsed time (in hundredths of a second) evaluating rules since the capture process was last started'
+          description: 'Total time (in hundredths of a second) spent evaluating rules to see if a change should be kept or filtered out.'
         },
         {
           field: 'ENQUEUE_TIME',
-          description: 'Time when the last message was enqueued'
+          description: 'The timestamp when the last message was sent to the Striim queue'
         },
         {
           field: 'LCR_TIME',
-          description: 'Elapsed time (in hundredths of a second) creating LCRs since the capture process was last started'
+          description: 'Total time spent converting a raw redo log entry into a structured LCR format that Striim understands'
         },
         {
           field: 'REDO_WAIT_TIME',
-          description: 'Elapsed time (in hundredths of a second) spent by the capture process in the WAITING FOR REDO state'
+          description: 'Total time the capture process spent doing nothing because it was waiting for the database to write more redo logs'
         },
         {
           field: 'REDO_MINED',
@@ -120,7 +120,7 @@ function ShowCommands() {
         },
         {
           field: 'RESTART_SCN',
-          description: 'The SCN from which the capture process started mining redo data when it was last started'
+          description: 'It is the oldest SCN the capture process needs to successfully restart if the database or Striim process crashes'
         }
       ]
     },
@@ -155,7 +155,57 @@ function ShowCommands() {
 ├───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼──────────────────────────┤
 │ 5.75M     │ 30M       │ 8.2M      │ 32.29M    │ 8.87M     │ 9.87M     │ 28.17M    │ 64M       │ 1         │ 0         │ 0         │ Waiting for message from │
 │           │           │           │           │           │           │           │           │           │           │           │ propagation sender       │
-└───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴──────────────────────────┘`
+└───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴──────────────────────────┘`,
+      fieldExplanations: [
+        {
+          field: 'LOG_MINER_USED',
+          description: 'Amount of Memory used by Log Miner. This memory is used for "Log File Reassembly." If you have very large transactions, LogMiner needs this RAM to piece together the fragments of those transactions spread across multiple redo logs.'
+        },
+        {
+          field: 'LOG_MINER_MAX',
+          description: 'Amount of Memory Allocated for Log Miner'
+        },
+        {
+          field: 'CAPTURE_USED',
+          description: 'Amount of Memory used by the Capture Process. Once LogMiner reads the logs, the Capture process transforms that data into LCRs (Logical Change Records). It also applies your "Filtering Rules" here.'
+        },
+        {
+          field: 'CAPTURE_ALLOCATED',
+          description: 'Amount of Memory Allocated by the Capture Process.'
+        },
+        {
+          field: 'APPLY_USED',
+          description: 'Amount of Memory used by the Apply Process. This is the "Waiting Room." Once an LCR is created, it sits here until the Striim application sends an acknowledgement (ACK) saying, "I have received this record and written it to my target."'
+        },
+        {
+          field: 'APPLY_ALLOCATED',
+          description: 'Amount of Memory Allocated by the Apply Process'
+        },
+        {
+          field: 'STREAMS_USED',
+          description: 'Amount of Streams Used. If this value hits STREAMS_ALLOCATED, the database literally stops the Capture process until memory is freed up'
+        },
+        {
+          field: 'STREAMS_ALLOCATED',
+          description: 'Amount of Streams Allocated'
+        },
+        {
+          field: 'MSGS_IN_MEM',
+          description: 'Messages in Memory. This is your Backlog. Under perfect conditions, this number should be low (e.g., 0 to 100). If it climbs into the thousands or millions, it means the database is capturing data much faster than the network or the Striim server can handle it.'
+        },
+        {
+          field: 'MSGS_SPILLED',
+          description: 'Number of messages moved from RAM to the SYSAUX tablespace on disk. Ideally you want 0 here'
+        },
+        {
+          field: 'TXNS_ROLLBACK',
+          description: 'The number of transactions the Capture process found in the logs that were eventually canceled (ROLLBACK).'
+        },
+        {
+          field: 'PROPAGATION_STATE',
+          description: 'Current Status. Here are some examples:\n      - INITIALIZING: The propagation receiver process is starting up and preparing to receive Logical Change Records (LCRs).\n      - SENDING UNAPPLIED TXNS: The receiver is sending transactions that have not yet been applied.\n      - WAITING FOR MESSAGE FROM CLIENT: The receiver is idle and waiting for incoming messages or LCRs from the client process.\n      - RECEIVING LCRS: The receiver is actively receiving Logical Change Records (LCRs) from the sender.\n      - EVALUATING RULES: The receiver is processing received LCRs and applying rule-based filtering to determine how they should be handled.\n      - ENQUEUEING LCRS: Enqueuing an LCR that satisfies the capture process rule sets into the capture process queue.\n      - WAITING FOR MEMORY: Waiting for memory to be freed\n      - WAITING FOR APPLY TO READ: Apply process is yet to read the data\n      - WAITING FOR MESSAGE FROM PROPAGATION SENDER: OJET is currently reading SCN and moving forward until arrives to the current SCN'
+        }
+      ]
     }
   ]
 
@@ -180,7 +230,33 @@ function ShowCommands() {
         <p>Reference Guide for OJET Commands and Queries</p>
       </div>
 
-      <div style={{ 
+      <div style={{
+        marginTop: '20px',
+        marginBottom: '24px',
+        padding: '16px',
+        background: '#fef3c7',
+        borderRadius: '8px',
+        border: '1px solid #f59e0b'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+          <Code size={20} color="#f59e0b" />
+          <strong style={{ color: '#92400e' }}>Note</strong>
+        </div>
+        <p style={{ margin: 0, fontSize: '13px', color: '#92400e' }}>
+          For more detailed information and additional commands, please refer to the{' '}
+          <a
+            href="https://www.striim.com/docs/platform/en/oracle-database-operational-considerations.html#using-the-show-command"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: '#92400e', textDecoration: 'underline', fontWeight: '600' }}
+          >
+            official OJET documentation
+          </a>
+          {' '}or contact your database administrator.
+        </p>
+      </div>
+
+      <div style={{
         marginBottom: '24px',
         padding: '16px',
         background: '#dbeafe',
@@ -192,7 +268,7 @@ function ShowCommands() {
           <strong style={{ color: '#1e40af' }}>About Show Commands</strong>
         </div>
         <p style={{ margin: 0, fontSize: '14px', color: '#1e40af' }}>
-          These commands help you monitor and troubleshoot OJET instances. 
+          These commands help you monitor and troubleshoot OJET instances.
           Replace <code style={{ background: '#bfdbfe', padding: '2px 6px', borderRadius: '4px' }}>&lt;Ojet_Source&gt;</code> with your actual OJET SOURCE name.
         </p>
       </div>
@@ -351,7 +427,8 @@ function ShowCommands() {
                             marginBottom: '10px',
                             fontSize: '12px',
                             color: '#374151',
-                            lineHeight: '1.6'
+                            lineHeight: '1.6',
+                            whiteSpace: 'pre-wrap'
                           }}>
                             <strong style={{ color: '#1f2937' }}>• {field.field}</strong> - {field.description}
                           </li>
@@ -414,31 +491,6 @@ function ShowCommands() {
           </div>
         </div>
       ))}
-
-      <div style={{ 
-        marginTop: '32px',
-        padding: '16px',
-        background: '#fef3c7',
-        borderRadius: '8px',
-        border: '1px solid #f59e0b'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-          <Code size={20} color="#f59e0b" />
-          <strong style={{ color: '#92400e' }}>Note</strong>
-        </div>
-        <p style={{ margin: 0, fontSize: '13px', color: '#92400e' }}>
-          For more detailed information and additional commands, please refer to the{' '}
-          <a
-            href="https://www.striim.com/docs/platform/en/oracle-database-operational-considerations.html#using-the-show-command"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: '#92400e', textDecoration: 'underline', fontWeight: '600' }}
-          >
-            official OJET documentation
-          </a>
-          {' '}or contact your database administrator.
-        </p>
-      </div>
     </div>
   )
 }

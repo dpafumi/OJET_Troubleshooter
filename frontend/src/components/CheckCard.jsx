@@ -1,8 +1,13 @@
 import { useState } from 'react'
-import { Play, Code, ChevronDown, ChevronUp, Wrench } from 'lucide-react'
+import { Play, Code, ChevronDown, ChevronUp, Wrench, X } from 'lucide-react'
 import axios from 'axios'
 
-function CheckCard({ check, isConnected }) {
+function CheckCard({ check, isConnected, dbConfigProd, dbConfigDownstream, isConnectedProd, isConnectedDownstream }) {
+  // Return empty div for placeholder cards
+  if (check.isPlaceholder) {
+    return <div style={{ visibility: 'hidden' }}></div>
+  }
+
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState(null)
   const [error, setError] = useState(null)
@@ -10,6 +15,7 @@ function CheckCard({ check, isConnected }) {
   const [params, setParams] = useState({})
   const [actionLoading, setActionLoading] = useState(false)
   const [actionResult, setActionResult] = useState(null)
+  const [showResults, setShowResults] = useState(true)
 
   const Icon = check.icon
 
@@ -33,9 +39,18 @@ function CheckCard({ check, isConnected }) {
     setError(null)
     setResults(null)
     setActionResult(null)
+    setShowResults(true) // Show results when running a new check
 
     try {
       let response
+
+      // Determine which database config to use
+      let dbConfigToUse = null
+      if (check.dbConnection === 'prod' && dbConfigProd) {
+        dbConfigToUse = dbConfigProd
+      } else if (check.dbConnection === 'downstream' && dbConfigDownstream) {
+        dbConfigToUse = dbConfigDownstream
+      }
 
       if (check.requiresParams) {
         // Validate required params
@@ -46,9 +61,11 @@ function CheckCard({ check, isConnected }) {
           return
         }
 
-        response = await axios.post(check.endpoint, params)
+        const payload = dbConfigToUse ? { ...params, dbConfig: dbConfigToUse } : params
+        response = await axios.post(check.endpoint, payload)
       } else {
-        response = await axios.post(check.endpoint)
+        const payload = dbConfigToUse ? { dbConfig: dbConfigToUse } : {}
+        response = await axios.post(check.endpoint, payload)
       }
 
       if (response.data.success) {
@@ -74,8 +91,17 @@ function CheckCard({ check, isConnected }) {
     try {
       let response
 
+      // Determine which database config to use
+      let dbConfigToUse = null
+      if (check.dbConnection === 'prod' && dbConfigProd) {
+        dbConfigToUse = dbConfigProd
+      } else if (check.dbConnection === 'downstream' && dbConfigDownstream) {
+        dbConfigToUse = dbConfigDownstream
+      }
+
       if (actionType === 'build-dictionary') {
-        response = await axios.post('/api/action/build-dictionary')
+        const payload = dbConfigToUse ? { dbConfig: dbConfigToUse } : {}
+        response = await axios.post('/api/action/build-dictionary', payload)
       } else if (actionType === 'prepare-tables') {
         // Parse tables from params
         const { tableOwner, tableNames } = params
@@ -93,7 +119,8 @@ function CheckCard({ check, isConnected }) {
           table: name.trim()
         }))
 
-        response = await axios.post('/api/action/prepare-tables', { tables })
+        const payload = dbConfigToUse ? { tables, dbConfig: dbConfigToUse } : { tables }
+        response = await axios.post('/api/action/prepare-tables', payload)
       }
 
       setActionResult(response.data)
@@ -117,15 +144,33 @@ function CheckCard({ check, isConnected }) {
   }
 
   const renderResults = () => {
-    if (!results) return null
+    if (!results || !showResults) return null
 
     // Special handling for SCN Validation
     if (check.id === 'scn-validation' && results.data) {
       return (
         <div className="results-container">
-          <h4 style={{ marginBottom: '12px', fontSize: '14px', fontWeight: '600' }}>
-            SCN Validation Results
-          </h4>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <h4 style={{ fontSize: '14px', fontWeight: '600', margin: 0 }}>
+              SCN Validation Results
+            </h4>
+            <button
+              onClick={() => setShowResults(false)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                color: '#6b7280',
+                fontSize: '13px'
+              }}
+              title="Close results"
+            >
+              <X size={18} />
+            </button>
+          </div>
           <div style={{ display: 'grid', gap: '12px' }}>
             <div style={{ padding: '12px', background: 'white', borderRadius: '6px', border: '1px solid #e5e7eb' }}>
               <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>
@@ -143,12 +188,30 @@ function CheckCard({ check, isConnected }) {
     // Standard table results
     if (results.data && Array.isArray(results.data) && results.data.length > 0) {
       const columns = results.columns || Object.keys(results.data[0])
-      
+
       return (
         <div className="results-container">
-          <h4 style={{ marginBottom: '12px', fontSize: '14px', fontWeight: '600' }}>
-            Results ({results.data.length} row{results.data.length !== 1 ? 's' : ''})
-          </h4>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <h4 style={{ fontSize: '14px', fontWeight: '600', margin: 0 }}>
+              Results ({results.data.length} row{results.data.length !== 1 ? 's' : ''})
+            </h4>
+            <button
+              onClick={() => setShowResults(false)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                color: '#6b7280',
+                fontSize: '13px'
+              }}
+              title="Close results"
+            >
+              <X size={18} />
+            </button>
+          </div>
           <div style={{ overflowX: 'auto' }}>
             <table className="results-table">
               <thead>
@@ -163,8 +226,8 @@ function CheckCard({ check, isConnected }) {
                   <tr key={idx}>
                     {columns.map(col => (
                       <td key={col}>
-                        {row[col] !== null && row[col] !== undefined 
-                          ? String(row[col]) 
+                        {row[col] !== null && row[col] !== undefined
+                          ? String(row[col])
                           : '-'}
                       </td>
                     ))}
@@ -180,7 +243,25 @@ function CheckCard({ check, isConnected }) {
     if (results.data && Array.isArray(results.data) && results.data.length === 0) {
       return (
         <div className="results-container">
-          <p style={{ color: '#6b7280', fontSize: '14px' }}>No results found</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <p style={{ color: '#6b7280', fontSize: '14px', margin: 0 }}>No results found</p>
+            <button
+              onClick={() => setShowResults(false)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                color: '#6b7280',
+                fontSize: '13px'
+              }}
+              title="Close results"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
       )
     }
@@ -281,7 +362,7 @@ function CheckCard({ check, isConnected }) {
           <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '12px', color: '#6b7280' }}>
             <Wrench size={14} style={{ display: 'inline', marginRight: '6px' }} />
             {check.id === 'table-instantiation'
-              ? 'Corrective Actions:  SCN_TO_START_TABLE should be higher than a BUILD'
+              ? 'Corrective Actions: ⚠️ SCN_TO_START_TABLE should be higher than a BUILD!'
               : 'Corrective Actions'}
           </div>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
